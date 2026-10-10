@@ -10,3 +10,6 @@ export const trust = (config, folder) =>
 
 // Untrusted: only the person's own settings, and no MCP servers but Spark's permission bridge.
 export const sessionGuard = (mode) => (mode === 'trusted' ? [] : ['--setting-sources', 'user', '--strict-mcp-config']);
+
+// Spark's mod reads this: an untrusted folder's own test script isn't run on its say-so.
+export const sessionEnv = (mode, env) => (mode === 'trusted' ? env : { ...env, SPARK_UNTRUSTED: '1' });

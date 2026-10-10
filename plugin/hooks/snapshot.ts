@@ -85,6 +85,14 @@ export async function restoreSnapshot(run: Run, target: Snapshot): Promise<Snaps
   return undo
 }
 
+// Whether the working tree differs from snapshot `base`, edits made by shell commands included.
+export async function changedSince(run: Run, base: string): Promise<boolean> {
+  const now = await writeTree(run, await sparkIndex(run))
+  const r = await run(['git', 'diff', '--quiet', base, now])
+  if (r.exitCode > 1) throw new Error(`git diff failed: ${r.stderr.trim()}`)
+  return r.exitCode === 1
+}
+
 // What changed since `base`, against the working tree as it is now: in `files`,
 // or anywhere when no list is given.
 export async function fileDiffs(run: Run, base: string, files?: readonly string[]): Promise<FileDiff[]> {

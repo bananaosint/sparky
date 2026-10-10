@@ -18,7 +18,9 @@
     "bin/",
     "src/",
     "plugin/.claude-plugin/plugin.json",
+    "plugin/agents/",
     "plugin/hooks/",
+    "plugin/skills/",
     "plugin/themes/",
     "assets/"
   ],

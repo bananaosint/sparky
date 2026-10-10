@@ -387,9 +387,10 @@ spark.on('event', (event) => {
   }
 });
 
-spark.on('permission', ({ id, tool, input }) => {
+spark.on('permission', ({ id, tool, input, note }) => {
   const card = el('div', 'permission');
   card.append(el('div', 'ask', `Claude wants to use ${tool}`), el('div', 'what', summary(tool, input)), details(tool, input));
+  if (note) card.append(el('div', 'gate-note', `✦ spark gate: ${note}`));
   const row = el('div', 'buttons');
   const answer = (allow, always) => {
     spark.answerPermission({ id, tool, allow, always });
@@ -402,7 +403,8 @@ spark.on('permission', ({ id, tool, input }) => {
   yes.addEventListener('click', () => answer(true, false));
   always.addEventListener('click', () => answer(true, true));
   no.addEventListener('click', () => answer(false, false));
-  row.append(yes, always, no);
+  // The gate asks about its commands every time, so "always" isn't offered for them.
+  row.append(yes, ...(note ? [] : [always]), no);
   card.append(row);
   both((a) => play(a, 'alert'));
   append(card);

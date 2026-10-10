@@ -454,6 +454,12 @@ pre.output.error {
   margin: 4px 0 2px;
 }
 
+.permission .gate-note {
+  color: #facc15;
+  font-size: 12.5px;
+  margin-top: 8px;
+}
+
 .permission .buttons {
   display: flex;
   gap: 8px;

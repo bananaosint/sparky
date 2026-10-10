@@ -5,6 +5,8 @@ export function parseArgs(argv) {
   if (first === 'install') return { command: 'install' };
   if (first === 'theme') return { command: 'theme', name: second };
   if (first === 'uninstall') return { command: 'uninstall' };
+  if (first === 'scan') return { command: 'scan' };
+  if (first === 'map') return { command: 'map' };
   if (first === 'key') {
     if (second === 'set') return { command: 'key-set' };
     if (second === 'clear') return { command: 'key-clear' };
@@ -18,7 +20,7 @@ export function parseArgs(argv) {
   }
 
   const rest = first === 'run' ? argv.slice(1) : argv;
-  const run = { command: 'run', plain: false, gemini: true, direct: false, animate: true, passthrough: [] };
+  const run = { command: 'run', plain: false, gemini: true, tests: true, direct: false, animate: true, passthrough: [] };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--') {
@@ -27,6 +29,7 @@ export function parseArgs(argv) {
     }
     if (arg === '--plain') run.plain = true;
     else if (arg === '--no-gemini') run.gemini = false;
+    else if (arg === '--no-tests') run.tests = false;
     else if (arg === '--direct') run.direct = true;
     else if (arg === '--no-anim') run.animate = false;
     else run.passthrough.push(arg);

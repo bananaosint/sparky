@@ -5,6 +5,7 @@ import type { CookPhase, ModeName } from '../types'
 import { linkModules, mergeWorktree, parseWorktrees, testCommand, worktreeStamp } from './agents'
 import type { Worktree } from './agents'
 import { composeCooked, decide } from './cook'
+import { designDocName } from './designdoc'
 import {
   MAX_SKILLS,
   endpoint,
@@ -25,11 +26,17 @@ import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
 import { failurePrompt, parseFailure, trimOutput } from './failure'
 import { budgetLine, overLimit, parseGoal, turnTokens } from './goal'
+import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, editAllowedWhileHalted, isBuild } from './halt'
+import { pruneOutput, readDenied } from './prune'
+import { classify, mergeTargets, parseVerdict, previewArgv } from './gate'
+import type { Preview } from './gate'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
 import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
+import { testGate } from './testgate'
+import type { GateIo } from './testgate'
 
 const PHASE = { plugin: 'spark', key: 'phase' } as const
 const MODES = { plugin: 'spark', key: 'modes' } as const
@@ -266,6 +273,9 @@ const FAILURE = { plugin: 'spark', key: 'failure' } as const
 const DIFFSTAT = { plugin: 'spark', key: 'diffstat' } as const
 const TOUCHED = { plugin: 'spark', key: 'touched' } as const
 const GOAL = { plugin: 'spark', key: 'goal' } as const
+const STREAK = { plugin: 'spark', key: 'streak' } as const
+const HALT = { plugin: 'spark', key: 'halt' } as const
+const VERDICTS = { plugin: 'spark', key: 'verdicts' } as const
 
 const DIFF_PANE = 'spark:diff'
 const AGENTS_PANE = 'spark:agents'
@@ -273,6 +283,8 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // The pane is for a glance; past this it says how many lines it left out.
 const PATCH_LINES = 400
 const TICK_MS = 2000
+// Each gate dry run gets this long before the raw command is shown instead.
+const PREVIEW_MS = 1500
 const NOTE: Partial<Record<FileDiff['kind'], string>> = { new: 'new file', deleted: 'deleted', lockfile: 'lockfile, not shown', binary: 'binary' }
 
 const COMMANDS = [
@@ -281,6 +293,7 @@ const COMMANDS = [
   { name: 'spark-restore', description: 'Spark: list turn snapshots, or restore one by number', argumentHint: '[N]' },
   { name: 'sandbox', description: 'Spark: end each turn with keep or revert' },
   { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
+  { name: 'spark-unhalt', description: 'Spark: lift the halt once the post-mortem is written' },
   {
     name: 'goal',
     description: 'Spark: work toward a goal; after each turn Gemini reviews the changes and proposes the next step',
@@ -300,6 +313,8 @@ let failureFile: string | undefined
 let failureMtime = 0
 let inRepo = false
 let snapshotWarned = false
+// Subagents spawned as spark:compliance-reviewer, by agent id: their reports are verdicts.
+const reviewers = new Set<string>()
 const tested = new Map<string, { stamp: string; ok: boolean; summary: string } | 'running'>()
 
 async function setDiffs($: EngineInterface, next: FileDiff[]) {
@@ -333,6 +348,126 @@ async function noteEdit($: EngineInterface, file: string) {
   const touched = await update($, TOUCHED, (t) => [...new Set([...(t ?? []), file])])
   if (touched.length === 1) await $.ui.open({ id: DIFF_PANE, title: 'diff' })
   await setDiffs($, await fileDiffs(runner($), turn.base, touched))
+}
+
+const gateIo = ($: EngineInterface): GateIo => ({
+  run: runner($),
+  list: async (dir) => (await $.fs.list(dir)).map((f) => f.name),
+  read: (path) => $.fs.read(path).catch(() => undefined),
+})
+
+// Spark's own config, where per-repo settings live; the repo itself is never asked.
+async function sparkConfig($: EngineInterface): Promise<unknown> {
+  const appData = await $.env.get('APPDATA')
+  if (!appData) return {}
+  try {
+    return JSON.parse(await $.fs.read(`${appData}/spark/config.json`))
+  } catch {
+    return {}
+  }
+}
+
+async function repoTop($: EngineInterface) {
+  const r = await runner($)(['git', 'rev-parse', '--show-toplevel']).catch(() => undefined)
+  return r?.exitCode === 0 ? r.stdout.trim() : '.'
+}
+
+// F10: counts a build or test outcome; true when this failure is the one that halts.
+async function countOutcome($: EngineInterface, ok: boolean) {
+  if (ok) {
+    await $.state.set(STREAK, 0)
+    return false
+  }
+  const streak = await update($, STREAK, (n) => (n ?? 0) + 1)
+  if (streak < HALT_AFTER || (await read($, HALT))) return false
+  await $.state.set(HALT, { at: await $.clock.now() })
+  $.ui.toast(HALT_REASON)
+  return true
+}
+
+// F2: a reviewer's verdict holds for the commit its branch was at when it was given.
+async function recordVerdict($: EngineInterface, report: string) {
+  const verdict = parseVerdict(report)
+  if (!verdict) return
+  const head = await runner($)(['git', 'rev-parse', verdict.branch])
+  if (head.exitCode !== 0) return
+  await update($, VERDICTS, (v) => ({ ...(v ?? {}), [verdict.branch]: { head: head.stdout.trim(), pass: verdict.pass } }))
+}
+
+// The agent worktree branch a merge would bring in without a PASS for its current commit, if any.
+async function unreviewedMerge($: EngineInterface, command: string) {
+  const targets = mergeTargets(command)
+  if (!targets.length) return undefined
+  const run = runner($)
+  const agentBranches = parseWorktrees((await run(['git', 'worktree', 'list', '--porcelain'])).stdout)
+    .slice(1)
+    .map((w) => w.branch)
+  const verdicts = (await read($, VERDICTS)) ?? {}
+  for (const target of targets) {
+    const branch = target
+    // A worktree-* branch is an agent's even after its worktree was removed.
+    if (!agentBranches.includes(branch) && !branch.startsWith('worktree-')) continue
+    const head = (await run(['git', 'rev-parse', branch])).stdout.trim()
+    if (!(verdicts[branch]?.pass && verdicts[branch]!.head === head)) return branch
+  }
+  return undefined
+}
+
+// The dry runs behind a gate question, each within its budget; past it, or on any failure,
+// the person sees the raw command instead.
+async function previewText($: EngineInterface, previews: readonly Preview[], top: string, command: string) {
+  if (!previews.length) return `$ ${command}`
+  try {
+    const shown: string[] = []
+    for (const p of previews) {
+      const r = await $.process.run(previewArgv(p), { cwd: top, timeoutMs: PREVIEW_MS })
+      shown.push(trimOutput(`${r.stdout}\n${r.stderr}`, 20) || '(nothing)')
+    }
+    return shown.join('\n')
+  } catch {
+    return `$ ${command}`
+  }
+}
+
+// F5: a long successful shell result reaches Claude as head and tail; the whole output is
+// saved under .spark/out, which git is told to ignore.
+async function pruneShell<R extends { result?: unknown; context?: readonly string[] }>($: EngineInterface, id: string | undefined, result: R) {
+  const stdout = (result.result as { stdout?: unknown } | undefined)?.stdout
+  if (typeof stdout !== 'string') return undefined
+  const saved = `${await repoTop($)}/.spark/out/${(id ?? String(await $.clock.now())).replace(/[^\w-]/g, '_')}.txt`
+  const short = pruneOutput(stdout, saved)
+  if (!short) return undefined
+  await $.fs.write(saved, stdout)
+  await ignoreSparkDir($)
+  // A fresh result, not a copy: without core's ref, core maps this one for the model.
+  return { result: { ...(result.result as object), stdout: short }, ...(result.context ? { context: result.context } : {}) } as unknown as R
+}
+
+async function ignoreSparkDir($: EngineInterface) {
+  const r = await runner($)(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'])
+  if (r.exitCode !== 0) return
+  const path = r.stdout.trim()
+  const now = await $.fs.read(path).catch(() => '')
+  if (now.split(/\r?\n/).includes('.spark/')) return
+  await $.fs.write(path, `${now}${now && !now.endsWith('\n') ? '\n' : ''}.spark/\n`)
+}
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+// F7: the approved plan goes to docs/design/ at the repo root (the working directory outside a repo).
+async function saveDesignDoc($: EngineInterface, plan: string) {
+  try {
+    const top = await runner($)(['git', 'rev-parse', '--show-toplevel'])
+    const dir = top.exitCode === 0 ? `${top.stdout.trim()}/docs/design` : 'docs/design'
+    const taken = new Set((await $.fs.list(dir).catch(() => [])).map((f) => f.name))
+    const now = new Date(await $.clock.now())
+    const name = designDocName(plan, `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`, taken)
+    if (!name) return
+    await $.fs.write(`${dir}/${name}`, plan.endsWith('\n') ? plan : `${plan}\n`)
+    $.ui.toast(`✦ plan saved to docs/design/${name}`)
+  } catch (err) {
+    $.ui.toast(`✦ plan not saved: ${message(err)}`)
+  }
 }
 
 async function endTurn($: EngineInterface) {
@@ -493,7 +628,9 @@ async function reviewGoal($: EngineInterface, e: { answer: string; usage?: Param
 }
 
 async function startWorkbench($: EngineInterface) {
-  for (const command of COMMANDS) await $.command.register(command)
+  // One refusal (Claude Code may have a /goal of its own) mustn't cost the rest of the workbench.
+  for (const command of COMMANDS)
+    await $.command.register(command).catch((err) => $.ui.toast(`✦ /${command.name} not added: ${message(err)}`))
   try {
     const r = await $.process.run(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'spark-failure.json'])
     inRepo = r.exitCode === 0
@@ -571,11 +708,11 @@ export const register: Register = (on, options) => {
     if (phase.kind !== 'idle') await $.state.set(PHASE, IDLE)
     if (decision.action === 'send' && decision.notice) $.ui.toast(`✦ ${decision.notice}`)
     const text = decision.action === 'offer' ? await promptify($, e.text, key!, config) : decision.text
-    const modeNote = e.origin.kind === 'composer' ? modesContext(modes) : undefined
+    const notes = e.origin.kind === 'composer' ? [modesContext(modes), (await read($, HALT)) ? HALT_CONTEXT : undefined].filter((n) => n !== undefined) : []
     return next({
       ...e,
       text,
-      ...(modeNote ? { context: [...(e.context ?? []), modeNote] } : {}),
+      ...(notes.length ? { context: [...(e.context ?? []), ...notes] } : {}),
     })
   }).catch(($, e, next) => next(e))
 
@@ -586,23 +723,81 @@ export const register: Register = (on, options) => {
 
 
   on('turn.start', async ($, e, next) => {
-    if (inRepo) await beginTurn($, e.text)
+    // A continuation (empty text, as after the test gate's block) is the same piece of work:
+    // its snapshot stays, so what the turn changed is still measured from the prompt.
+    if (inRepo && !(e.text === '' && (await read($, TURN)))) await beginTurn($, e.text)
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    const result = await next(e)
-    const input = e as { file_path?: unknown; notebook_path?: unknown }
+    const input = e as { file_path?: unknown; notebook_path?: unknown; command?: unknown }
     const file = input.file_path ?? input.notebook_path
+    if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && (await read($, HALT)) && !editAllowedWhileHalted(file, await repoTop($)))
+      return { deny: HALT_REASON }
+    const unread = e.tool === 'Read' && typeof file === 'string' ? readDenied(file, await repoTop($)) : undefined
+    if (unread) return { deny: unread }
+    const result = await next(e)
+    const shell = e.tool === 'Bash' || e.tool === 'PowerShell'
+    let out = result
+    if (shell && !e.agentId && typeof input.command === 'string' && isBuild(input.command) && !result.deny)
+      if (await countOutcome($, !result.isError)) out = { ...result, context: [...(result.context ?? []), HALT_REASON] } as typeof result
+    // The tool has run: a failure from here on must not lose its result.
+    if (shell && result.deny === undefined && !result.isError) out = (await pruneShell($, e.tool_use_id, out).catch(() => undefined)) ?? out
     if (!e.agentId && EDIT_TOOLS.has(e.tool) && typeof file === 'string' && !result.deny && !result.isError) {
       // Off the tool's path: the model shouldn't wait on git.
       void noteEdit($, file).catch(() => {})
     }
-    return result
+    const plan = e.tool === 'ExitPlanMode' && !e.agentId && !result.deny && !result.isError ? (result.result as { plan?: unknown })?.plan : undefined
+    if (typeof plan === 'string' && plan.trim()) await saveDesignDoc($, plan)
+    return out
   })
+
+  // F1: shell commands are classified before they run. The gate only tightens core's verdict:
+  // a deny stays a deny, and it never turns an ask into an allow.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    const command = (e.input as { command?: unknown } | undefined)?.command
+    if (verdict.decision === 'deny' || (e.tool !== 'Bash' && e.tool !== 'PowerShell') || typeof command !== 'string') return verdict
+    try {
+      const unreviewed = await unreviewedMerge($, command)
+      if (unreviewed)
+        return { ...verdict, decision: 'deny', reason: `✦ spark gate: blocked: merge of ${unreviewed} without a PASS from spark:compliance-reviewer for its current commit` }
+      const top = await repoTop($)
+      const branch = /\bpush\b/.test(command) ? (await runner($)(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined))?.stdout.trim() : undefined
+      const v = classify(command, e.tool === 'Bash' ? 'bash' : 'powershell', { repo: top, home: (await $.env.get('USERPROFILE')) ?? '', branch })
+      if (v?.kind === 'deny') return { ...verdict, decision: 'deny', reason: v.reason }
+      if (v?.kind !== 'ask') return verdict
+      if (await read($, HALT)) return { ...verdict, decision: 'deny', reason: HALT_REASON }
+      return { ...verdict, decision: 'ask', reason: `✦ spark gate: ${v.reason}\n${await previewText($, v.previews, top, command)}` }
+    } catch {
+      return verdict
+    }
+  }).catch(($, e, next) => next(e))
+
+  // F4: a turn that changed files can't end on failing tests; the tail goes back to Claude.
+  on('classic.Stop', async ($, e, next) => {
+    const done = await next(e)
+    const turn = await read($, TURN)
+    if (!turn || (await read($, HALT)) || (await $.env.get('SPARK_NO_TESTS'))) return done
+    try {
+      const untrusted = Boolean(await $.env.get('SPARK_UNTRUSTED'))
+      const gate = await testGate(gateIo($), { base: turn.base, answer: e.last_assistant_message ?? '' }, await sparkConfig($), { untrusted })
+      if (gate && !(await countOutcome($, gate.ok)) && !gate.ok) return { ...done, block: gate.block }
+    } catch (err) {
+      $.ui.toast(`✦ tests not run: ${message(err)}`)
+    }
+    return done
+  }).catch(($, e, next) => next(e))
+
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (e.subagentType === 'spark:compliance-reviewer' && spawned.agentId) reviewers.add(spawned.agentId)
+    return spawned
+  }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
+    if (e.agentId && reviewers.has(e.agentId)) await recordVerdict($, e.answer).catch(() => {})
     if (!e.agentId)
       void endTurn($)
         .catch(() => {})
@@ -615,6 +810,16 @@ export const register: Register = (on, options) => {
     const isOn = await update($, SANDBOX, (v) => !v)
     if (!isOn) await $.state.set(REVIEW, null)
     return { text: isOn ? '✦ sandbox on: each turn ends with keep or revert' : '✦ sandbox off' }
+  })
+
+  on('command.run', { command: 'spark-unhalt' }, async ($) => {
+    const halt = await read($, HALT)
+    if (!halt) return { text: '✦ not halted' }
+    const written = (await $.fs.list(`${await repoTop($)}/docs/postmortems`).catch(() => [])).some((f) => f.name.endsWith('.md') && f.mtimeMs > halt.at)
+    if (!written) return { text: '✦ still halted: write the post-mortem first (/spark:postmortem)' }
+    await $.state.set(HALT, null)
+    await $.state.set(STREAK, 0)
+    return { text: '✦ halt lifted' }
   })
 
   on('command.run', { command: 'spark-fix' }, async ($) => ({

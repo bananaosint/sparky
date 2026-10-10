@@ -85,6 +85,7 @@ These prompts are sent as typed instead:
 | `/spark-fix` | Send the last failed `spark try` command to Claude |
 | `/goal <goal> [--time 30m] [--tokens 500k]` | Work toward a goal: after each turn Gemini compares the changes with the goal and puts the next step in the prompt box (Enter sends it, or edit it). Ends when you press `6` (goal met) or `7` (stop), or at the time or token limit, counted across the whole goal. `/goal` shows progress, `/goal stop` ends it |
 | `/spark-agents` | Pane with subagents and worktrees; test a worktree, then merge it once its tests pass |
+| `/spark-unhalt` | Lift a halt once the post-mortem is written (see Guardrails) |
 | `/thinking-red-team` | Toggle adversarial security review of proposed changes |
 | `/grillme` | Toggle grill mode (also runs your grillme skill) |
 | `/anti-slop` | Toggle removal of needless abstractions and filler |
@@ -118,6 +119,7 @@ runs the command with its output as usual. If it fails, Spark records it in `.gi
 Launcher flags:
 - `--plain`: no banner, theme or spinner verbs
 - `--no-gemini`: send every prompt as typed this session
+- `--no-tests`: don't run the tests when Claude ends a turn that changed files
 - `--direct`: run Claude Code without Spark's terminal layer (its own mascot shows again)
 - `--no-anim`: skip Sparky's startup animation
 
@@ -131,22 +133,30 @@ Two looks: `spark theme` shows the current one, `spark theme teal` switches to t
 - **What leaves your machine for Gemini:** your typed prompt, with secrets swapped for `«secret-N»` placeholders, and your skills' names and descriptions. The placeholders are swapped back before the rewrite lands in the box.
 - **What leaves your machine for skills.sh:** up to two short keyword queries (60 characters at most) that Gemini writes from your redacted prompt, such as `playwright e2e`. Not the prompt itself. Turn it off with "Search skills.sh" in `/config`.
 
-## Roadmap
+## Guardrails
 
-Planned in the design (`docs/design/2026-10-09--spark--design.md`); none of this exists yet.
+These run in every Spark session, in the terminal and in the app. The design is `docs/design/2026-10-09--spark--design.md`.
 
-Next:
-- **Command gate (F1):** risky shell commands are blocked, or wait for your approval with a dry-run preview, such as how many files a delete would remove.
-- **Test gate (F4):** when a turn changed files, Spark runs the repo's tests before Claude can finish and sends failures back.
-- **Halt after two failures (F10):** after two failed builds or test runs in a row, Claude stops editing until it writes a post-mortem.
-- **Leaner context (F5):** long command output is trimmed (the full copy is saved), and lockfiles, build output and `node_modules` can't be read into the conversation.
-- **Saved plans (F7):** a plan you approve in plan mode is saved to `docs/design/`.
-- **UI taste (F8):** a `spark:ui-taste` skill for interface work.
-- **Isolated subagents (F2):** a `spark:implementer` agent that always works in its own worktree. The caps and the test-then-merge gate already exist.
+- **Command gate (F1):** before a Bash or PowerShell command runs, Spark reads every command in it: quotes respected, each part of a `&&`, `;` or `|` chain, and the string inside `bash -c` or `powershell -Command`.
+  - **Blocked:** recursive deletes outside the repo or of your home folder or a drive root, force pushes to main or master, downloads piped into a shell, encoded PowerShell, `Set-ExecutionPolicy`, registry writes (`reg add`/`reg delete`, HKLM), `format`/`diskpart`/`bcdedit`, and anything that touches Spark's config or Claude Code's credentials.
+  - **Asked first, with a dry run where one exists:** deletes and moves (how many files, and the first ten), `git clean` (`git clean -n`), `git reset --hard`, `git checkout -- .` and `git restore` (`git diff --stat HEAD`), rebases, pushes and `git branch -D` (the commits at stake), package installs, network commands, and `-Force`. Each dry run gets 1.5 seconds; past that you see the raw command.
+  - The gate never allows anything itself: what it lets through still meets Claude Code's own permissions. It reads text, so an obfuscated command can get past it. In the app, the approval card shows why the gate asks (not the dry run), and "Always allow" never covers a command the gate asks about. In Claude Code's auto mode, the auto-mode classifier answers the gate's questions instead of you.
+- **Test gate (F4):** when Claude ends a turn that changed files (shell commands' changes included) and its last message isn't a question, Spark runs the tests. A failure sends Claude back with the last 60 lines of output. The command is your own from `repos` in `%APPDATA%\spark\config.json`, keyed by the repo's path and never read from the repo itself; otherwise the repo's files pick one (npm, pnpm, yarn, bun, cargo, go or pytest; npm's "no test specified" placeholder doesn't count). In a folder you opened safely in the app, only your own configured command runs, never the folder's own script. If `package.json`'s `test`, `pretest` or `posttest` script changed during the turn, Spark doesn't run it and says so. A run gets five minutes. `spark --no-tests` turns the gate off for a session.
 
-Later:
-- **Code map (F3):** `spark map` draws the call graph of files changed since the last snapshot.
-- **Scanner (F9):** `spark scan` runs osv-scanner and `/security-review`, and flags instruction-like text in diffs.
+  ```json
+  { "repos": { "C:\\code\\invoice-app": { "test": "npm test -- --reporter=dot" } } }
+  ```
+- **Halt after two failures (F10):** two failed test-gate runs or builds in a row halt the session. A command line counts as a build when its last command is one: `npm run build` (and `build:*`), `pnpm build`, `yarn build`, `tsc`, `vite build`, `dotnet build`, `msbuild`, `cargo build` or `go build`. Edits are denied except under `docs/postmortems/`, commands the gate would ask about are blocked, and every prompt carries `<spark-halt>`. Run `/spark:postmortem` to have Claude write the post-mortem, then `/spark-unhalt`, which works once a post-mortem newer than the halt exists.
+- **Leaner context (F5):** a successful command's output over 200 lines reaches Claude as its first 40 and last 120 lines, colors stripped and progress redraws collapsed. The full output is saved to `.spark/out/<id>.txt`, which Spark adds to `.git/info/exclude`. Claude can't Read lockfiles, minified files, or anything under `node_modules`, `dist`, `build` or `obj`.
+- **Saved plans (F7):** a plan you approve in plan mode is saved to `docs/design/YYYY-MM-DD--<title>--design.md` at the repo root.
+- **UI taste (F8):** the `spark:ui-taste` skill sets rules for type, space, color, copy and empty/loading/error states, with a screenshot check at 375 and 1440 px. Spark's rules tell Claude to load it for UI work.
+- **Reviewed agents (F2):** `spark:implementer` works in its own git worktree, test first. `spark:compliance-reviewer` reads the branch with read-only tools and ends with `VERDICT: PASS <branch>` or `VERDICT: FAIL <branch>`. Spark records the verdict for the branch's commit at that moment and blocks `git merge` or `git cherry-pick` of an agent worktree's branch without a PASS for its current commit.
+- **Restore points (F6):** the snapshots above.
+
+## Checks you run
+
+- **`spark scan` (F9):** runs [osv-scanner](https://github.com/google/osv-scanner/releases) over the repo if it's installed, and flags lines in your uncommitted changes and untracked files that read like instructions to an AI ("ignore previous instructions", `<system>` tags). It flags; it never blocks. For a code review of the changes, run `/security-review` in a session. It exits with 1 when it found something.
+- **`spark map` (F3):** lists the calls between functions in the JS/TS files changed since the last snapshot, with callees in the same file or in a file it imports. It reads the source as text, so calls through objects, aliases or dynamic dispatch don't show.
 
 ## Develop
 
