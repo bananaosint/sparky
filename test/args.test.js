@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseArgs } from '../src/args.js';
 
 test('no arguments means run', () => {
-  assert.deepEqual(parseArgs([]), { command: 'run', plain: false, gemini: true, passthrough: [] });
+  assert.deepEqual(parseArgs([]), { command: 'run', plain: false, gemini: true, direct: false, passthrough: [] });
 });
 
 test('spark run strips the word run', () => {
@@ -11,10 +11,11 @@ test('spark run strips the word run', () => {
 });
 
 test('spark flags are consumed, everything else passes through to claude', () => {
-  assert.deepEqual(parseArgs(['--plain', '-c', '--no-gemini', '--model', 'opus']), {
+  assert.deepEqual(parseArgs(['--plain', '-c', '--no-gemini', '--direct', '--model', 'opus']), {
     command: 'run',
     plain: true,
     gemini: false,
+    direct: true,
     passthrough: ['-c', '--model', 'opus'],
   });
 });

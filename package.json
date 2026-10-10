@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "A launcher and mod for Claude Code on Windows: Gemini-cooked prompts, modes, guardrails.",
   "repository": {
@@ -34,5 +34,8 @@
   },
   "devDependencies": {
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.15"
   }
 }

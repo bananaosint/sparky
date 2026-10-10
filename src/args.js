@@ -17,7 +17,7 @@ export function parseArgs(argv) {
   }
 
   const rest = first === 'run' ? argv.slice(1) : argv;
-  const run = { command: 'run', plain: false, gemini: true, passthrough: [] };
+  const run = { command: 'run', plain: false, gemini: true, direct: false, passthrough: [] };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--') {
@@ -26,6 +26,7 @@ export function parseArgs(argv) {
     }
     if (arg === '--plain') run.plain = true;
     else if (arg === '--no-gemini') run.gemini = false;
+    else if (arg === '--direct') run.direct = true;
     else run.passthrough.push(arg);
   }
   return run;

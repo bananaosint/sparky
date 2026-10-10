@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,7 @@ import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
 import { tryCommand, shellLine } from '../src/failure.js';
 import { install, uninstall } from '../src/install.js';
+import { createSkin } from '../src/skin.js';
 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -20,6 +22,7 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
   spark [flags] [claude args]   start Claude Code in this folder
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
+    --direct                    run claude without Spark's terminal layer (Sparky in place of the crab)
     --                          pass everything after it to claude
   spark install                 add a Spark profile to Windows Terminal and Sparky shortcuts
   spark uninstall               remove them
@@ -36,7 +39,36 @@ function modelDefaults() {
   return [manifest.userConfig.rewrite_models.default, manifest.userConfig.route_models.default].flatMap((list) => list.split(','));
 }
 
-function run({ plain, gemini, passthrough }) {
+// The native pseudo-terminal module; without it Spark runs claude directly.
+function loadPty() {
+  try {
+    return createRequire(import.meta.url)('@lydell/node-pty');
+  } catch {
+    return undefined;
+  }
+}
+
+// Runs claude in a pseudo-terminal so its crab can be redrawn as Sparky on the way to the screen.
+function runSkinned(pty, args, env) {
+  const child = pty.spawn('claude.exe', args, {
+    name: 'xterm-256color',
+    cols: process.stdout.columns,
+    rows: process.stdout.rows,
+    cwd: process.cwd(),
+    env,
+  });
+  child.onData(createSkin((text) => process.stdout.write(text)));
+  process.stdin.setRawMode(true);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (data) => child.write(data));
+  process.stdout.on('resize', () => child.resize(process.stdout.columns, process.stdout.rows));
+  child.onExit(({ exitCode }) => {
+    process.stdin.setRawMode(false);
+    process.exit(exitCode);
+  });
+}
+
+function run({ plain, gemini, direct, passthrough }) {
   const key = gemini ? loadKey() : undefined;
   if (!plain) {
     const state = !gemini ? 'gemini off' : key ? 'gemini on' : 'gemini off: run spark key set';
@@ -45,7 +77,10 @@ function run({ plain, gemini, passthrough }) {
   const env = { ...process.env };
   if (key) env.SPARK_GEMINI_KEY = key;
   if (plain) env.SPARK_PLAIN = '1';
-  const child = spawn('claude', claudeArgs({ pluginDir, settings: sessionSettings({ plain }), passthrough }), {
+  const args = claudeArgs({ pluginDir, settings: sessionSettings({ plain }), passthrough });
+  const pty = plain || direct || !process.stdin.isTTY || !process.stdout.isTTY ? undefined : loadPty();
+  if (pty) return runSkinned(pty, args, env);
+  const child = spawn('claude', args, {
     stdio: 'inherit',
     env,
   });
