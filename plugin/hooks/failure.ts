@@ -1,7 +1,7 @@
 // The last failed `spark try` command, as the launcher records it.
 export type Failure = { command: string; cwd: string; exitCode: number; output: string; at: number }
 
-const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g
+export const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g
 const PASSING = /^\s*(✓|✔|√|PASS\b|ok \d|\(pass\))/
 
 export function parseFailure(text: string): Failure | undefined {

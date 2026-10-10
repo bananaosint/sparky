@@ -14,6 +14,8 @@ test('without a key, or with gemini off, the session says so; plain marks the en
   assert.equal(prepareSession({ pluginDir: 'p', key: null, theme: 'ultraviolet', env: {} }).state, 'gemini off: run spark key set');
   assert.equal(prepareSession({ pluginDir: 'p', gemini: false, key: null, theme: 'ultraviolet', env: {} }).state, 'gemini off');
   assert.equal(prepareSession({ pluginDir: 'p', plain: true, key: null, theme: 'ultraviolet', env: {} }).env.SPARK_PLAIN, '1');
+  assert.equal(prepareSession({ pluginDir: 'p', tests: false, key: null, theme: 'ultraviolet', env: {} }).env.SPARK_NO_TESTS, '1');
+  assert.equal(prepareSession({ pluginDir: 'p', key: null, theme: 'ultraviolet', env: {} }).env.SPARK_NO_TESTS, undefined);
 });
 
 test('an unknown configured theme falls back to ultraviolet', () => {

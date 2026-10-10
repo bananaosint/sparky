@@ -11,6 +11,7 @@ export function prepareSession({
   pluginDir,
   plain = false,
   gemini = true,
+  tests = true,
   passthrough = [],
   env = process.env,
   key = gemini ? loadKey() : undefined,
@@ -19,6 +20,7 @@ export function prepareSession({
   const childEnv = { ...env, SPARK_THEME: theme };
   if (key) childEnv.SPARK_GEMINI_KEY = key;
   if (plain) childEnv.SPARK_PLAIN = '1';
+  if (!tests) childEnv.SPARK_NO_TESTS = '1';
   return {
     args: claudeArgs({ pluginDir, settings: sessionSettings({ plain, theme }), passthrough }),
     env: childEnv,

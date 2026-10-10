@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTrusted, trust, sessionGuard } from '../lib/trust.js';
+import { isTrusted, trust, sessionGuard, sessionEnv } from '../lib/trust.js';
 
 test('a folder is trusted only once the person said so, whatever its spelling', () => {
   const config = trust({}, 'C:\\Code\\App\\');
@@ -13,4 +13,9 @@ test('a folder is trusted only once the person said so, whatever its spelling', 
 test('an untrusted folder runs without its project settings, hooks or MCP servers', () => {
   assert.deepEqual(sessionGuard('trusted'), []);
   assert.deepEqual(sessionGuard('safe'), ['--setting-sources', 'user', '--strict-mcp-config']);
+});
+
+test("an untrusted folder's session tells Spark's mod so, which then runs none of the folder's scripts", () => {
+  assert.deepEqual(sessionEnv('safe', { PATH: 'p' }), { PATH: 'p', SPARK_UNTRUSTED: '1' });
+  assert.deepEqual(sessionEnv('trusted', { PATH: 'p' }), { PATH: 'p' });
 });

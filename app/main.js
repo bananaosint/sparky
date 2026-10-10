@@ -16,7 +16,8 @@ import { cookPrompt, quickAnswer } from './lib/cook.js';
 import { describeSkills, listSkills } from './lib/skills.js';
 import { payer } from './lib/account.js';
 import { homedir } from 'node:os';
-import { isTrusted, trust, sessionGuard } from './lib/trust.js';
+import { isTrusted, trust, sessionGuard, sessionEnv } from './lib/trust.js';
+import { gateNote } from './lib/gate.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Installed, the plugin, assets and permission bridge sit beside the app as plain files.
@@ -83,10 +84,12 @@ function startBridge() {
     req.on('end', () => {
       const { tool, input } = JSON.parse(body || '{}');
       const answer = (decision) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(decision));
-      if (alwaysAllow.has(tool) || (EDIT_TOOLS.has(tool) && settings().autoEdits)) return answer({ allow: true });
+      // A command Spark's gate holds is asked about every time: "always" can't cover it.
+      const note = gateNote(tool, input, { repo: cwd, home: homedir() });
+      if (!note && (alwaysAllow.has(tool) || (EDIT_TOOLS.has(tool) && settings().autoEdits))) return answer({ allow: true });
       const id = randomBytes(6).toString('hex');
       pending.set(id, answer);
-      send('permission', { id, tool, input });
+      send('permission', { id, tool, input, note });
     });
   });
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ url: `http://127.0.0.1:${server.address().port}/approve`, token })));
@@ -134,7 +137,7 @@ function startClaude({ resume } = {}) {
     ...(settings().effort !== 'default' ? ['--effort', settings().effort] : []),
     ...(resume ? ['--resume', resume] : []),
   ];
-  const child = spawn('claude', args, { cwd, env: base.env, windowsHide: true });
+  const child = spawn('claude', args, { cwd, env: sessionEnv(folderMode, base.env), windowsHide: true });
   claude = child;
   let errors = '';
   createInterface({ input: child.stdout }).on('line', (line) => {

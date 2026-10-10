@@ -20,7 +20,9 @@ export function testCommand(files: readonly string[], packageJson?: string): str
   const has = (name: string) => files.includes(name)
   if (has('package.json')) {
     try {
-      if (!JSON.parse(packageJson ?? '{}')?.scripts?.test) return undefined
+      const script = JSON.parse(packageJson ?? '{}')?.scripts?.test
+      // npm init's placeholder fails on purpose; it isn't a test suite.
+      if (!script || /no test specified/.test(script)) return undefined
     } catch {
       return undefined
     }

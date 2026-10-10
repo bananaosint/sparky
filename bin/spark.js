@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -15,6 +15,8 @@ import { loadConfig, saveConfig } from '../src/config.js';
 import { THEME_NAMES } from '../src/palettes.js';
 import { createSkin } from '../src/skin.js';
 import { translatePaste } from '../src/paste.js';
+import { scan } from '../src/scan.js';
+import { codeMap } from '../src/map.js';
 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -25,6 +27,7 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
   spark [flags] [claude args]   start Claude Code in this folder
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
+    --no-tests                  don't run the tests when Claude ends a turn that changed files
     --direct                    skip Spark's terminal layer (Claude Code's own mascot shows again)
     --no-anim                   show Sparky without the startup animation
     --                          pass everything after it to claude
@@ -35,6 +38,8 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
   spark key set                 store your Gemini API key, encrypted for your Windows account
   spark key clear               delete the stored key
   spark doctor                  check claude, git, the key and the Gemini models
+  spark map                     the calls between functions in JS/TS files changed since the last snapshot
+  spark scan                    vulnerable dependencies (osv-scanner) and AI-instruction-like text in your changes
 
 In a session: Enter cooks the prompt, Enter again sends it.
 Start a prompt with \\ to send it as typed.`;
@@ -85,8 +90,8 @@ async function runSkinned(pty, args, env, theme, intro) {
   held = undefined;
 }
 
-function run({ plain, gemini, direct, animate, passthrough }) {
-  const { args, env, theme, state } = prepareSession({ pluginDir, plain, gemini, passthrough });
+function run({ plain, gemini, tests, direct, animate, passthrough }) {
+  const { args, env, theme, state } = prepareSession({ pluginDir, plain, gemini, tests, passthrough });
   const intro = plain ? undefined : frames({ theme, subline: `${basename(process.cwd())} · ${state}` });
   const showIntro = async () => {
     if (!intro) return;
@@ -192,6 +197,28 @@ switch (args.command) {
   case 'doctor':
     await doctor();
     break;
+  case 'map': {
+    const runGit = async (argv, init = {}) => {
+      const r = spawnSync(argv[0], argv.slice(1), { cwd: init.cwd, env: { ...process.env, ...init.env }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      return { exitCode: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    try {
+      console.log(await codeMap({ run: runGit, read: (path) => readFileSync(path, 'utf8') }));
+    } catch (err) {
+      console.error(`spark map needs a git repo: ${err.message}`);
+      process.exitCode = 1;
+    }
+    break;
+  }
+  case 'scan': {
+    const { text, code } = scan({
+      run: (argv) => spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+      read: (path) => readFileSync(path, 'utf8'),
+    });
+    console.log(text);
+    process.exitCode = code;
+    break;
+  }
   case 'install': {
     const theme = configuredTheme();
     const { fragmentDir, shortcuts } = install({

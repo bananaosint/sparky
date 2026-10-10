@@ -31,6 +31,9 @@ declare module 'claude-code' {
       diffstat: { files: number; added: number; removed: number } | null
       touched: string[]
       goal: Goal | null
+      streak: number
+      halt: { at: number } | null
+      verdicts: Record<string, { head: string; pass: boolean }>
     }
   }
 }
