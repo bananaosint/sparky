@@ -37,3 +37,9 @@ test('doctor and help', () => {
   assert.deepEqual(parseArgs(['help']), { command: 'help' });
   assert.deepEqual(parseArgs(['--help']), { command: 'help' });
 });
+
+test('spark try takes the command to run, with or without --', () => {
+  assert.deepEqual(parseArgs(['try', 'npm', 'test']), { command: 'try', argv: ['npm', 'test'] });
+  assert.deepEqual(parseArgs(['try', '--', 'npm', 'test', '--', '-t', 'login']), { command: 'try', argv: ['npm', 'test', '--', '-t', 'login'] });
+  assert.equal(parseArgs(['try']).error, 'spark try needs a command, e.g. spark try npm test');
+});

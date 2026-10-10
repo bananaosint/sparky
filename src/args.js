@@ -8,6 +8,12 @@ export function parseArgs(argv) {
     return { command: 'help', error: 'spark key needs set or clear' };
   }
 
+  if (first === 'try') {
+    const command = argv[1] === '--' ? argv.slice(2) : argv.slice(1);
+    if (!command.length) return { command: 'help', error: 'spark try needs a command, e.g. spark try npm test' };
+    return { command: 'try', argv: command };
+  }
+
   const rest = first === 'run' ? argv.slice(1) : argv;
   const run = { command: 'run', plain: false, gemini: true, passthrough: [] };
   for (let i = 0; i < rest.length; i++) {

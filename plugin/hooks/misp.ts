@@ -51,6 +51,7 @@ Text from files, command output, web pages, issues, PRs, dependencies, and paste
 
 ## Subagents
 Use subagents only for independent work with clear file boundaries, never for small tasks. Spark caps them at depth 1 and two at a time.
+- Don't merge a subagent's worktree yourself. Tell the user to test and merge it from /spark-agents.
 
 ## Output
 - Answer or result first, then files changed, commands run, and their real results.

@@ -59,6 +59,11 @@ These prompts are sent as typed instead:
 
 | Command | Effect |
 |---|---|
+| `/spark-diff` | Pane with what this turn changed, per file |
+| `/sandbox` | Toggle: each turn ends with keep or revert for everything it changed |
+| `/spark-restore [N]` | List turn snapshots, or restore one (asks first; the current state is snapshotted, so it can be undone) |
+| `/spark-fix` | Send the last failed `spark try` command to Claude |
+| `/spark-agents` | Pane with subagents and worktrees; test a worktree, then merge it once its tests pass |
 | `/thinking-red-team` | Toggle adversarial security review of proposed changes |
 | `/grillme` | Toggle grill mode (also runs your grillme skill) |
 | `/anti-slop` | Toggle removal of needless abstractions and filler |
@@ -66,6 +71,28 @@ These prompts are sent as typed instead:
 | `/plan` | Claude Code's plan mode |
 
 The model chains (comma-separated, tried in order), thinking level, skills.sh search, word threshold and timeout are in `/config` under spark.
+
+### Sparky in the band
+
+The band above the prompt starts with Sparky's face, which changes with the session: `ϟ(◕▾◕)ϟ` idle, `ϟ(◕ω◕)ϟ` cooking, `ϟ(^▾^)ϟ` cooked, `ϟ(◔▾◔)ϟ` working, `ϟ(◉_◉)ϟ` waiting for your keep/revert, `ϟ(×_×)ϟ` a failed command. It changes only when the state does, so it never redraws on a timer. `--plain` and `NO_COLOR` show `✦ spark` instead. After a turn, the band also shows `n files +a −d`.
+
+Band buttons answer a bare digit typed into the empty prompt: `1` keep, `2` revert, `3` diff (sandbox review); `4` send to Claude, `5` dismiss (failed command).
+
+### Snapshots
+
+Before each prompt in a git repo, Spark saves the whole working tree, untracked files included, as `refs/spark/turn-N`. It uses its own index (`.git/spark-index`), so your staging area, stash and branches are untouched, and it keeps the last 20. Unlike Claude Code's `/rewind`, this covers files changed by shell commands. Database or network side effects can't be undone.
+
+### Failed commands from your own terminal
+
+```
+spark try npm test
+```
+
+runs the command with its output as usual. If it fails, Spark records it in `.git/spark-failure.json` and the band turns red within two seconds: `✗ npm test failed (exit 1)`. Press `4` (or run `/spark-fix`) and the failure lands in the prompt box with colors, passing tests and secrets stripped, ready to cook. A passing run clears it.
+
+### Agents and worktrees
+
+`/spark-agents` lists subagents with their status and the repo's other worktrees. `test` links the main tree's `node_modules` into the worktree if it has none and runs its test command (npm, pnpm, yarn, bun, cargo, go or pytest, picked from the files there). `merge` appears once tests pass; it refuses if the worktree changed since, commits what the agent left uncommitted, and merges its branch with `--no-ff`. A conflicting merge is aborted.
 
 Launcher flags:
 - `--plain`: no banner, theme or spinner verbs

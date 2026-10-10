@@ -8,6 +8,7 @@ import { renderBanner } from '../src/banner.js';
 import { sessionSettings, claudeArgs } from '../src/settings.js';
 import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
+import { tryCommand, shellLine } from '../src/failure.js';
 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -19,6 +20,7 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
     --                          pass everything after it to claude
+  spark try <command>           run a command; if it fails, the Spark band offers to send it to Claude
   spark key set                 store your Gemini API key, encrypted for your Windows account
   spark key clear               delete the stored key
   spark doctor                  check claude, git, the key and the Gemini models
@@ -39,6 +41,7 @@ function run({ plain, gemini, passthrough }) {
   }
   const env = { ...process.env };
   if (key) env.SPARK_GEMINI_KEY = key;
+  if (plain) env.SPARK_PLAIN = '1';
   const child = spawn('claude', claudeArgs({ pluginDir, settings: sessionSettings({ plain }), passthrough }), {
     stdio: 'inherit',
     env,
@@ -135,6 +138,11 @@ switch (args.command) {
   case 'doctor':
     await doctor();
     break;
+  case 'try': {
+    const { exitCode, recorded } = await tryCommand({ command: shellLine(args.argv) });
+    if (exitCode !== 0 && !recorded) console.error('spark: not in a git repo, so the Spark band will not see this failure.');
+    process.exit(exitCode);
+  }
   default:
     if (args.error) console.error(args.error);
     console.log(HELP);

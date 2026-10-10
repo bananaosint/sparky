@@ -2,6 +2,8 @@ import { read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CookPhase, ModeName } from '../types'
+import { linkModules, mergeWorktree, parseWorktrees, testCommand, worktreeStamp } from './agents'
+import type { Worktree } from './agents'
 import { composeCooked, decide } from './cook'
 import {
   MAX_SKILLS,
@@ -19,7 +21,11 @@ import {
 import type { RemoteSkill, SkillInfo } from './gemini'
 import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
+import { failurePrompt, parseFailure, trimOutput } from './failure'
+import { FACES, mood } from './mascot'
 import { redact } from './redact'
+import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot } from './snapshot'
+import type { FileDiff, Run } from './snapshot'
 
 const PHASE = { plugin: 'spark', key: 'phase' } as const
 const MODES = { plugin: 'spark', key: 'modes' } as const
@@ -35,8 +41,12 @@ const REWRITE_MODELS =
   'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it'
 const ROUTE_MODELS = 'gemini-3.5-flash-lite,gemini-3.1-flash-lite'
 
-// "✦ spark" in the banner's blue-to-ultraviolet gradient, a color per letter.
+// Sparky's face in the banner's blue-to-ultraviolet gradient, a color per cell.
 const LABEL_COLORS = ['#38BDF8', '#38BDF8', '#4C8EF5', '#6366F1', '#7A5EF3', '#915AF5', '#A855F7']
+const ERROR = '#FB7185'
+
+// --plain and NO_COLOR get the plain label instead of a face.
+let plainBand = false
 
 const models = (list: unknown) =>
   String(list)
@@ -220,6 +230,208 @@ async function toggle($: EngineInterface, mode: ModeName) {
   return modes.includes(mode) ? `✦ ${mode} on` : `✦ ${mode} off`
 }
 
+const SANDBOX = { plugin: 'spark', key: 'sandbox' } as const
+const TURN = { plugin: 'spark', key: 'turn' } as const
+const REVIEW = { plugin: 'spark', key: 'review' } as const
+const FAILURE = { plugin: 'spark', key: 'failure' } as const
+const DIFFSTAT = { plugin: 'spark', key: 'diffstat' } as const
+const TOUCHED = { plugin: 'spark', key: 'touched' } as const
+
+const DIFF_PANE = 'spark:diff'
+const AGENTS_PANE = 'spark:agents'
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+// The pane is for a glance; past this it says how many lines it left out.
+const PATCH_LINES = 400
+const TICK_MS = 2000
+const NOTE: Partial<Record<FileDiff['kind'], string>> = { new: 'new file', deleted: 'deleted', lockfile: 'lockfile, not shown', binary: 'binary' }
+
+const COMMANDS = [
+  { name: 'spark-diff', description: 'Spark: show what this turn changed' },
+  { name: 'spark-fix', description: 'Spark: send the last failed spark try command to Claude' },
+  { name: 'spark-restore', description: 'Spark: list turn snapshots, or restore one by number', argumentHint: '[N]' },
+  { name: 'sandbox', description: 'Spark: end each turn with keep or revert' },
+  { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
+]
+
+const runner =
+  ($: EngineInterface): Run =>
+  (argv, init) =>
+    $.process.run(argv, init)
+const message = (err: unknown) => String((err as Error)?.message ?? err)
+
+// Kept in the module, not in state: patches can be large and only the panes read them.
+let diffs: FileDiff[] = []
+let failureFile: string | undefined
+let failureMtime = 0
+let inRepo = false
+let snapshotWarned = false
+const tested = new Map<string, { stamp: string; ok: boolean; summary: string } | 'running'>()
+
+async function setDiffs($: EngineInterface, next: FileDiff[]) {
+  diffs = next
+  const stat = next.length
+    ? { files: next.length, added: next.reduce((n, d) => n + d.added, 0), removed: next.reduce((n, d) => n + d.removed, 0) }
+    : null
+  await $.state.set(DIFFSTAT, stat)
+  $.ui.invalidate('ui.render')
+}
+
+const openPane = ($: EngineInterface, id: string, title: string) => $.ui.open({ id, title, focus: true, closeOnEscape: true })
+
+async function beginTurn($: EngineInterface, text: string) {
+  try {
+    const snap = await takeSnapshot(runner($), `before: ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
+    await $.state.set(TURN, { n: snap.n, base: snap.sha })
+  } catch (err) {
+    await $.state.set(TURN, null)
+    if (!snapshotWarned) $.ui.toast(`✦ snapshots off: ${message(err)}`)
+    snapshotWarned = true
+  }
+  await $.state.set(REVIEW, null)
+  await $.state.set(TOUCHED, [])
+  await setDiffs($, [])
+}
+
+async function noteEdit($: EngineInterface, file: string) {
+  const turn = await read($, TURN)
+  if (!turn) return
+  const touched = await update($, TOUCHED, (t) => [...new Set([...(t ?? []), file])])
+  if (touched.length === 1) await $.ui.open({ id: DIFF_PANE, title: 'diff' })
+  await setDiffs($, await fileDiffs(runner($), turn.base, touched))
+}
+
+async function endTurn($: EngineInterface) {
+  const turn = await read($, TURN)
+  if (!turn) return
+  await setDiffs($, await fileDiffs(runner($), turn.base))
+  if (!diffs.length || !(await read($, SANDBOX))) return
+  await $.state.set(REVIEW, turn)
+  await $.ui.open({ id: DIFF_PANE, title: 'review' })
+}
+
+async function keepTurn($: EngineInterface) {
+  await $.state.set(REVIEW, null)
+  $.ui.invalidate('ui.render')
+}
+
+async function revertTurn($: EngineInterface) {
+  const review = await read($, REVIEW)
+  if (!review) return
+  try {
+    const run = runner($)
+    const target = (await listSnapshots(run)).find((s) => s.n === review.n)
+    if (!target) throw new Error(`snapshot ${review.n} is gone`)
+    const undo = await restoreSnapshot(run, target)
+    await $.state.set(REVIEW, null)
+    await setDiffs($, [])
+    $.ui.toast(`✦ reverted the turn. /spark-restore ${undo.n} brings it back.`)
+  } catch (err) {
+    $.ui.toast(`✦ not reverted: ${message(err)}`)
+  }
+}
+
+const openDiff = ($: EngineInterface) => openPane($, DIFF_PANE, 'diff')
+
+async function pollFailure($: EngineInterface) {
+  if (!failureFile) return
+  if (!(await $.fs.exists(failureFile))) {
+    if (await read($, FAILURE)) {
+      await $.state.set(FAILURE, null)
+      $.ui.invalidate('ui.render')
+    }
+    return
+  }
+  const { mtimeMs } = await $.fs.stat(failureFile)
+  if (mtimeMs === failureMtime) return
+  failureMtime = mtimeMs
+  const failure = parseFailure(await $.fs.read(failureFile))
+  if (!failure) return
+  await $.state.set(FAILURE, failure)
+  $.ui.invalidate('ui.render')
+}
+
+async function attachFailure($: EngineInterface) {
+  const failure = await read($, FAILURE)
+  if (!failure) return false
+  await $.state.set(FAILURE, null)
+  $.ui.invalidate('ui.render')
+  // After a command the engine clears the box; fill it once that has happened.
+  void $.clock
+    .sleep(30)
+    .then(() => $.prompt.fill({ text: redact(failurePrompt(failure)).text }))
+    .catch(async () => {
+      await $.state.set(FAILURE, failure)
+      $.ui.toast('✦ Could not fill the prompt box. Run /spark-fix again.')
+    })
+  return true
+}
+
+async function dismissFailure($: EngineInterface) {
+  await $.state.set(FAILURE, null)
+  $.ui.invalidate('ui.render')
+}
+
+async function testWorktree($: EngineInterface, main: Worktree, wt: Worktree) {
+  tested.set(wt.path, 'running')
+  $.ui.invalidate('ui.render')
+  const run = runner($)
+  try {
+    const names = (await $.fs.list(wt.path)).map((f) => f.name)
+    const pkg = names.includes('package.json') ? await $.fs.read(`${wt.path}/package.json`) : undefined
+    const argv = testCommand(names, pkg)
+    if (!argv) throw new Error('no test command found')
+    if (pkg !== undefined) await linkModules(run, main.path, wt.path)
+    const r = await $.process.run(argv, { cwd: wt.path, timeoutMs: 600_000 })
+    const summary = trimOutput(`${r.stdout}\n${r.stderr}`, 1) || `exit ${r.exitCode}`
+    tested.set(wt.path, { stamp: await worktreeStamp(run, wt.path), ok: r.exitCode === 0, summary })
+  } catch (err) {
+    tested.set(wt.path, { stamp: '', ok: false, summary: message(err) })
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function mergeAgent($: EngineInterface, main: Worktree, wt: Worktree) {
+  const run = runner($)
+  const name = wt.branch ?? wt.head.slice(0, 7)
+  try {
+    const t = tested.get(wt.path)
+    if (!t || t === 'running' || !t.ok) throw new Error('its tests have not passed')
+    if ((await worktreeStamp(run, wt.path)) !== t.stamp) throw new Error('it changed since its tests passed; test again')
+    await mergeWorktree(run, main.path, wt, `Agent work from ${name}`)
+    tested.delete(wt.path)
+    $.ui.toast(`✦ merged ${name}`)
+  } catch (err) {
+    $.ui.toast(`✦ ${name} not merged: ${message(err)}`)
+  }
+  $.ui.invalidate('ui.render')
+}
+
+const AGENT_MARK: Record<string, [string, string]> = {
+  running: ['●', '#38BDF8'],
+  pending: ['○', '#94A3B8'],
+  waiting: ['…', '#FACC15'],
+  completed: ['✓', '#4ADE80'],
+  failed: ['✗', '#FB7185'],
+}
+
+async function startWorkbench($: EngineInterface) {
+  for (const command of COMMANDS) await $.command.register(command)
+  try {
+    const r = await $.process.run(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'spark-failure.json'])
+    inRepo = r.exitCode === 0
+    failureFile = inRepo ? r.stdout.trim() : undefined
+  } catch {
+    inRepo = false
+  }
+  // Nothing useful to do when a tick fails, and a toast every two seconds would bury the session.
+  $.clock.every(TICK_MS, () => {
+    void (async () => {
+      await pollFailure($)
+      if ((await $.ui.panes()).some((p) => p.id === AGENTS_PANE && p.isShown)) $.ui.invalidate('ui.render')
+    })().catch(() => {})
+  })
+}
+
 export const register: Register = (on, options) => {
   const config: Config = {
     rewriteModels: models(options.rewrite_models ?? REWRITE_MODELS),
@@ -241,6 +453,8 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'thinking-red-team', description: MODE_DESCRIPTIONS['thinking-red-team'] })
     await $.command.register({ name: 'anti-slop', description: MODE_DESCRIPTIONS['anti-slop'] })
     await $.command.register({ name: 'spark-modes', description: 'Spark: show active modes, or "off" to clear them', argumentHint: '[off]' })
+    plainBand = Boolean((await $.env.get('SPARK_PLAIN')) || (await $.env.get('NO_COLOR')))
+    await startWorkbench($)
     return next(e)
   })
 
@@ -290,10 +504,180 @@ export const register: Register = (on, options) => {
     return { ...composed, sections: [...composed.sections, { id: 'spark:misp', text: MISP, scope: 'session' as const }] }
   })
 
+
+  on('turn.start', async ($, e, next) => {
+    if (inRepo) await beginTurn($, e.text)
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    const input = e as { file_path?: unknown; notebook_path?: unknown }
+    const file = input.file_path ?? input.notebook_path
+    if (!e.agentId && EDIT_TOOLS.has(e.tool) && typeof file === 'string' && !result.deny && !result.isError) {
+      // Off the tool's path: the model shouldn't wait on git.
+      void noteEdit($, file).catch(() => {})
+    }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    if (!e.agentId) void endTurn($).catch(() => {})
+    return done
+  })
+
+  on('command.run', { command: 'sandbox' }, async ($) => {
+    const isOn = await update($, SANDBOX, (v) => !v)
+    if (!isOn) await $.state.set(REVIEW, null)
+    return { text: isOn ? '✦ sandbox on: each turn ends with keep or revert' : '✦ sandbox off' }
+  })
+
+  on('command.run', { command: 'spark-fix' }, async ($) => ({
+    text: (await attachFailure($))
+      ? '✦ failure attached: edit it, then Enter cooks it'
+      : '✦ no failed command to attach. Run it with spark try <command> first.',
+  }))
+
+  on('command.run', { command: 'spark-diff' }, async ($) => {
+    if (!(await read($, TURN))) return { text: '✦ nothing to diff yet: Spark snapshots each turn in a git repo' }
+    await openDiff($)
+    return { text: diffs.length ? '✦ diff pane open' : '✦ no changes this turn' }
+  })
+
+  on('command.run', { command: 'spark-agents' }, async ($) => {
+    await openPane($, AGENTS_PANE, 'agents')
+    return { text: '✦ agents pane open' }
+  })
+
+  on('command.run', { command: 'spark-restore' }, async ($, e) => {
+    const run = runner($)
+    try {
+      const snaps = await listSnapshots(run)
+      const arg = (e.args ?? '').trim()
+      if (!arg) {
+        if (!snaps.length) return { text: '✦ no snapshots yet' }
+        const now = await $.clock.now()
+        const rows = snaps.map((s) => `  ${s.n}  ${Math.round((now - s.at) / 60000)}m ago  ${s.label}`)
+        return { text: ['✦ snapshots, newest first (/spark-restore N):', ...rows].join('\n') }
+      }
+      const target = snaps.find((s) => String(s.n) === arg)
+      if (!target) return { text: `✦ no snapshot ${arg}. /spark-restore lists them.` }
+      const answer = await $.ui.ask(
+        `Restore the working tree to snapshot ${target.n} (${target.label})? Files changed since are overwritten or removed; the current state is snapshotted first.`,
+        ['Restore', 'Cancel'],
+      )
+      if (answer !== 'Restore') return { text: '✦ restore cancelled' }
+      const undo = await restoreSnapshot(run, target)
+      await $.state.set(REVIEW, null)
+      await setDiffs($, [])
+      return { text: `✦ restored snapshot ${target.n}. /spark-restore ${undo.n} undoes it.` }
+    } catch (err) {
+      return { text: `✦ ${message(err)}` }
+    }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: DIFF_PANE }, async ($, e) => {
+    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    const review = await read($, REVIEW)
+    let budget = PATCH_LINES
+    return (
+      <Box flexDirection="column">
+        {review ? (
+          <Box>
+            <Text color="#C084FC">turn {review.n}: keep these changes? </Text>
+            <Button key="keep" hotkey="k" label="keep" onPress={() => keepTurn($)} />
+            <Text> </Text>
+            <Button key="revert" hotkey="r" label="revert" onPress={() => revertTurn($)} />
+          </Box>
+        ) : null}
+        {diffs.length ? null : <Text dimColor>no changes this turn</Text>}
+        {diffs.map((d) => {
+          const lines = d.patch?.split('\n') ?? []
+          const shown = lines.slice(0, Math.max(0, budget))
+          budget -= shown.length
+          return (
+            <Box flexDirection="column" marginTop={1}>
+              <Box>
+                <Text bold>{d.path}</Text>
+                <Text color="#4ADE80"> +{d.added}</Text>
+                <Text color="#FB7185"> −{d.removed}</Text>
+                {NOTE[d.kind] ? <Text dimColor> {NOTE[d.kind]}</Text> : null}
+              </Box>
+              {shown.length ? <Code source={shown.join('\n')} format="diff" path={d.path} /> : null}
+              {shown.length < lines.length ? <Text dimColor>… {lines.length - shown.length} more lines</Text> : null}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: AGENTS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const [agents, listed] = await Promise.all([$.agent.list(), runner($)(['git', 'worktree', 'list', '--porcelain'])])
+    const [main, ...others] = listed.exitCode === 0 ? parseWorktrees(listed.stdout) : []
+    // git lists the main tree first, so any other worktree means `main` is set.
+    return (
+      <Box flexDirection="column">
+        <Text bold>agents</Text>
+        {agents.length ? null : <Text dimColor>none this session</Text>}
+        {agents.map((a) => {
+          const [mark, color] = AGENT_MARK[a.status] ?? ['·', '#94A3B8']
+          return (
+            <Box>
+              <Text color={color}>{mark} </Text>
+              <Text>{a.description} </Text>
+              <Text dimColor>
+                {a.type} · {a.status}
+              </Text>
+            </Box>
+          )
+        })}
+        <Box marginTop={1}>
+          <Text bold>worktrees</Text>
+        </Box>
+        {others.length ? null : <Text dimColor>none besides the main tree</Text>}
+        {others.map((wt) => {
+          const t = tested.get(wt.path)
+          return (
+            <Box>
+              <Text>{wt.branch ?? wt.head.slice(0, 7)} </Text>
+              <Text dimColor>{wt.path} </Text>
+              {t === 'running' ? <Text color="#38BDF8">testing… </Text> : null}
+              {t && t !== 'running' ? <Text color={t.ok ? '#4ADE80' : '#FB7185'}>{`${t.ok ? '✓' : '✗'} ${t.summary} `}</Text> : null}
+              <Button key={`test:${wt.path}`} label="test" onPress={() => void testWorktree($, main!, wt)} />
+              {t && t !== 'running' && t.ok ? (
+                <Button key={`merge:${wt.path}`} label="merge" onPress={() => void mergeAgent($, main!, wt)} />
+              ) : null}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const [phase = IDLE, modes = [], key] = await Promise.all([read($, PHASE), read($, MODES), read($, KEY)])
-    const { Box, Text } = $.ui.resolve(e)
+    const [phase = IDLE, modes = [], key, failure, review, sandbox, stat] = await Promise.all([
+      read($, PHASE),
+      read($, MODES),
+      read($, KEY),
+      read($, FAILURE),
+      read($, REVIEW),
+      read($, SANDBOX),
+      read($, DIFFSTAT),
+    ])
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const face = FACES[
+      mood({
+        working: e.props.isWorking,
+        cooking: phase.kind === 'cooking',
+        cooked: phase.kind === 'cooked',
+        failed: Boolean(failure),
+        review: Boolean(review),
+      })
+    ]
 
     const status =
       phase.kind === 'cooking' ? (
@@ -310,16 +694,39 @@ export const register: Register = (on, options) => {
         <Text dimColor>gemini off: run spark key set</Text>
       )
 
+    // A bare digit in the empty composer presses these buttons.
     return (
-      <Box>
-        {[...'✦ spark'].map((ch, i) => (
-          <Text color={LABEL_COLORS[i]} bold>
-            {ch}
-          </Text>
-        ))}
-        <Text> </Text>
-        {status}
-        {modes.length ? <Text color="#C084FC"> · modes: {modes.join(', ')}</Text> : null}
+      <Box flexDirection="column">
+        <Box>
+          {[...(plainBand ? '✦ spark' : face)].map((ch, i) => (
+            <Text color={failure ? ERROR : LABEL_COLORS[i]} bold>
+              {ch}
+            </Text>
+          ))}
+          <Text> </Text>
+          {status}
+          {modes.length ? <Text color="#C084FC"> · modes: {modes.join(', ')}</Text> : null}
+          {sandbox ? <Text color="#E879F9"> · sandbox</Text> : null}
+          {stat ? <Text dimColor>{` · ${stat.files} files +${stat.added} −${stat.removed}`}</Text> : null}
+        </Box>
+        {review ? (
+          <Box>
+            <Text color="#C084FC">turn {review.n} changed {stat?.files ?? 0} files: </Text>
+            <Button key="keep" hotkey="1" label="1 keep" onPress={() => keepTurn($)} />
+            <Text> </Text>
+            <Button key="revert" hotkey="2" label="2 revert" onPress={() => revertTurn($)} />
+            <Text> </Text>
+            <Button key="diff" hotkey="3" label="3 diff" onPress={() => void openDiff($)} />
+          </Box>
+        ) : null}
+        {failure ? (
+          <Box>
+            <Text color={ERROR}>{`✗ ${failure.command} failed (exit ${failure.exitCode}) `}</Text>
+            <Button key="fix" hotkey="4" label="4 send to Claude" onPress={() => void attachFailure($)} />
+            <Text> </Text>
+            <Button key="dismiss" hotkey="5" label="5 dismiss" onPress={() => dismissFailure($)} />
+          </Box>
+        ) : null}
       </Box>
     )
   })
