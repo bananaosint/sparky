@@ -21,3 +21,10 @@ test('other keys never wait on the clipboard check', async () => {
   await translatePaste('a', async () => (asked = true));
   assert.equal(asked, false);
 });
+
+test('with win32 input mode on, the Ctrl+V key-down event becomes the image-paste key', async () => {
+  const down = '\x1b[86;47;22;1;8;1_';
+  const up = '\x1b[86;47;22;0;8;1_';
+  assert.equal(await translatePaste(down + up, yes), ALT_V + up);
+  assert.equal(await translatePaste(down, no), down);
+});

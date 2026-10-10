@@ -9,7 +9,7 @@ export type SubmittedPrompt = {
 
 export type CookConfig = { enabled: boolean; minWords: number }
 
-export type Decision = { action: 'cook' } | { action: 'send'; text: string; notice?: string }
+export type Decision = { action: 'cook' } | { action: 'offer' } | { action: 'send'; text: string; notice?: string }
 
 export type Rewrite = { prompt: string; unclear: string[]; role?: string }
 
@@ -37,7 +37,8 @@ export function decide(e: SubmittedPrompt, phase: CookPhase, config: CookConfig)
   if (phase.kind === 'cooked' && isEditOf(phase.text, text)) return send(text)
   if (!config.enabled || e.turnId !== undefined) return send(text)
   if (text.trimStart().startsWith('/')) return send(text)
-  if (e.attachments?.length) return send(text, 'Prompts with images are sent as typed.')
+  // The box can't hold the image again, so a prompt with one is offered for promptifying where it stands.
+  if (e.attachments?.length) return { action: 'offer' }
   if (text.includes('<pasted_content')) return send(text, 'Prompts with pasted text are sent as typed.')
   if (text.trim().split(/\s+/).length < config.minWords) return send(text)
   return { action: 'cook' }

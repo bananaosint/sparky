@@ -195,3 +195,56 @@ test('the band draws the spark label letter by letter in the blue-to-ultraviolet
   expect(json).toContain('gemini off: run spark key set')
   expect(json).toContain('"type":"Image"')
 })
+
+// Types a prompt with an image attached and answers Spark's two questions in turn.
+async function imagePrompt($: Engine, on: any, answers: string[]) {
+  mock.env(on, { SPARK_GEMINI_KEY: 'test-key' })
+  const clock = mock.clock(on)
+  on('env.set', () => ({ value: undefined }))
+  on('command.register', (_$: unknown, e: any) => ({ value: { command: e.name } }))
+  on('session.start', (_$: unknown, e: any) => ({ cwd: e.cwd }))
+  const asked: string[] = []
+  // $.ui.ask is a tool call of AskUserQuestion; the test answers it.
+  on('tool.call', (_$: unknown, e: any) => {
+    const question = e.questions?.[0]?.question ?? JSON.stringify(e)
+    asked.push(question)
+    return { result: { questions: e.questions, answers: { [question]: answers.shift() } } }
+  })
+  on('http.fetch', () => ({
+    value: {
+      status: 200,
+      ok: true,
+      headers: {},
+      text: JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ prompt: 'Restyle the header to match the attached screenshot.', unclear: [] }) }] } }] }),
+    },
+  }))
+  const reached: { text: string; attachments?: readonly unknown[] }[] = []
+  on('prompt.submit', (_$: unknown, e: any) => {
+    reached.push({ text: e.text, attachments: e.attachments })
+    return { text: e.text }
+  })
+  await $.session.start({ cwd: 'C:\\code\\app', surface: 'terminal', isInteractive: true })
+  const submitted = $.prompt.submit({
+    text: 'make the header look like this screenshot',
+    wait: false,
+    origin: composer,
+    attachments: [{ type: 'image', mediaType: 'image/png' }],
+  } as any)
+  await clock.settle()
+  await submitted
+  return { asked, reached }
+}
+
+test('a prompt with an image asks first; "Send as typed" sends it unchanged with the image', async ($, on) => {
+  const { asked, reached } = await imagePrompt($, on, ['Send as typed'])
+  expect(asked.length).toBe(1)
+  expect(asked[0]).toContain('Promptify')
+  expect(reached).toEqual([{ text: 'make the header look like this screenshot', attachments: [{ type: 'image', mediaType: 'image/png' }] }])
+})
+
+test('promptifying shows Gemini\'s version and sends it with the image when chosen', async ($, on) => {
+  const { asked, reached } = await imagePrompt($, on, ['Promptify', "Send Gemini's version"])
+  expect(asked.length).toBe(2)
+  expect(asked[1]).toContain('Restyle the header to match the attached screenshot.')
+  expect(reached).toEqual([{ text: 'Restyle the header to match the attached screenshot.', attachments: [{ type: 'image', mediaType: 'image/png' }] }])
+})

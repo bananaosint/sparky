@@ -32,9 +32,10 @@ test('mid-turn prompts are steering and go straight through', () => {
   expect(decide({ ...typed('no, use the other config file instead'), turnId: 't1' }, idle, config).action).toBe('send')
 })
 
-test('images and pasted text are never cooked, with a notice', () => {
+test('a prompt with an image is offered for promptifying instead of cooked; pasted text is sent as typed', () => {
   const withImage = { ...typed('make the header look like this screenshot'), attachments: [{ type: 'image' as const }] }
-  expect(decide(withImage, idle, config)).toMatchObject({ action: 'send', notice: expect.any(String) })
+  expect(decide(withImage, idle, config)).toEqual({ action: 'offer' })
+  expect(decide(withImage, idle, { ...config, enabled: false })).toEqual({ action: 'send', text: withImage.text })
   const pasted = typed('fix this error\n<pasted_content id="a1">\nTypeError: x\n</pasted_content id="a1">')
   expect(decide(pasted, idle, config)).toMatchObject({ action: 'send', notice: expect.any(String) })
 })

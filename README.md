@@ -42,7 +42,7 @@ Run `spark` in any project folder. Claude Code starts as usual, with Spark loade
 2. The rewrite replaces your text in the prompt box. The role is the first line. Any open questions appear as "Ask me before starting:" lines, chosen skills as a `Skills:` line, and suggested installs as an "Install these skills first" list that Claude installs with `npx skills add <id> -g -y`. Delete any you don't want. Edit anything.
 3. Press **Enter** again to send it to Claude.
 
-Images: copy one and press **Ctrl+V** (or Claude Code's own **Alt+V**); Spark turns Ctrl+V into an image paste when the clipboard holds an image. Prompts with images skip the Gemini rewrite, since Spark can't see the image.
+Images: copy one and press **Ctrl+V** (or Claude Code's own **Alt+V**); Spark turns Ctrl+V into an image paste when the clipboard holds an image. When you send a prompt with an image, Spark asks whether to promptify it with Gemini: pick Promptify and you get Gemini's version to send or skip; either way the image stays attached. Gemini sees only your text, not the image.
 
 These prompts are sent as typed instead:
 - prompts that start with `\`
@@ -50,7 +50,7 @@ These prompts are sent as typed instead:
 - prompts under 4 words
 - slash commands
 - prompts typed while Claude is working
-- prompts with images or pasted text
+- prompts with pasted text
 
 | Command | Effect |
 |---|---|

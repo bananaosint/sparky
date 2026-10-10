@@ -224,6 +224,25 @@ async function cook($: EngineInterface, raw: string, id: number, config: Config)
   if (note) $.ui.toast(`✦ ${note}. Enter sends your prompt as typed.`)
 }
 
+// A prompt with an image can't go back into the box without losing the image, so
+// Spark asks where it stands: promptify with Gemini, then send Gemini's version or the original.
+async function promptify($: EngineInterface, text: string, key: string, config: Config): Promise<string> {
+  const choice = await $.ui.ask('Promptify this prompt with Gemini first? The image stays attached.', ['Promptify', 'Send as typed'])
+  if (choice !== 'Promptify') return text
+  try {
+    const { text: safe, restore } = redact(text)
+    const { answer } = await firstAnswer($, key, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs)
+    const rewrite = parseRewrite(answer)
+    if (!rewrite) throw new Error('the rewrite came back empty')
+    const cooked = restore(composeCooked(rewrite, []))
+    const pick = await $.ui.ask(`Gemini's version:\n\n${cooked}`, ["Send Gemini's version", 'Send mine as typed'])
+    return pick === "Send Gemini's version" ? cooked : text
+  } catch (err) {
+    $.ui.toast(`✦ Promptify failed (${String((err as Error)?.message ?? err)}). Sending your prompt as typed.`)
+    return text
+  }
+}
+
 async function cookOrGiveUp($: EngineInterface, raw: string, id: number, config: Config) {
   try {
     await cook($, raw, id, config)
@@ -550,11 +569,12 @@ export const register: Register = (on, options) => {
     }
 
     if (phase.kind !== 'idle') await $.state.set(PHASE, IDLE)
-    if (decision.notice) $.ui.toast(`✦ ${decision.notice}`)
+    if (decision.action === 'send' && decision.notice) $.ui.toast(`✦ ${decision.notice}`)
+    const text = decision.action === 'offer' ? await promptify($, e.text, key!, config) : decision.text
     const modeNote = e.origin.kind === 'composer' ? modesContext(modes) : undefined
     return next({
       ...e,
-      text: decision.text,
+      text,
       ...(modeNote ? { context: [...(e.context ?? []), modeNote] } : {}),
     })
   }).catch(($, e, next) => next(e))
