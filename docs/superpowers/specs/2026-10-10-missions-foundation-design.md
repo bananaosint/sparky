@@ -159,6 +159,7 @@ Every text field passes through `redact()` (`plugin/hooks/redact.ts`) before it 
 
 - Spark checks no criterion itself. The verification sub-project runs `how` commands from the app, which also closes the fake-gate-record gap.
 - A shell command written to get past the text-reading gate could still append to `gate.jsonl`.
+- The plugin appends to `gate.jsonl` by reading the file and writing it back. That is safe because the plugin is its only writer and the app reads only after the Stop hook has returned. A second concurrent writer would need a real append.
 - Restoring a mission's start snapshot from the window is part of the changes and checkpoints sub-project. The refs are kept for it.
 - Missions are per folder; there is no cross-project list.
 - Terminal missions have no cost, token or permission records, no criteria editor, and no Resume.

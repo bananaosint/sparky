@@ -2397,7 +2397,7 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
 
 - [ ] **Step 3: Renderer wiring** (`app/renderer.js`)
 
-Add the import and state, then the functions:
+Add the import and state at the top. Put the rest after `const markdown = …` (around line 255): `createMissionsView` takes `markdown` by value, so it must come after that line.
 
 ```js
 import { createMissionsView } from './lib/missions-view.js';
@@ -2558,6 +2558,8 @@ In `marathonCommand`, after the gemini/auto check, add `if (activeMission) retur
 #bar .actions button.on { background: color-mix(in srgb, var(--c2) 28%, transparent); }
 
 #missions { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; padding: 16px 24px 24px; min-height: 0; flex: 1; overflow: hidden; }
+/* An id rule beats the browser's [hidden] rule, so hidden has to be restated. */
+#missions[hidden] { display: none; }
 .mission-list { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .mission-list input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--c2) 40%, transparent); background: var(--panel); color: inherit; font: inherit; }
 #mission-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
@@ -2607,7 +2609,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--c1); text-de
 
 - [ ] **Step 5: Screenshot check**
 
-Open `app/index.html` in Playwright (`file://`, after `cd app; npm run stage`). Before the page scripts run, inject a stub `window.spark` with these canned answers:
+`renderer.js` is a module, and Chromium won't load module imports from a `file://` page. So serve `app/` over http: write a short `node:http` static server in `%TEMP%\spark-shots\serve.mjs` that takes the folder as an argument, run `cd app; npm run stage`, start the server, and open it in Playwright. Before the page scripts run, inject a stub `window.spark` with these canned answers:
 - `missions()`: one finished mission with a report, and one running.
 - `missionView()`: a view for each, the running one with a 60-row timeline.
 - `on`: records handlers, so the test can fire a `review` message.
@@ -2664,6 +2666,9 @@ function terminal(on: any) {
     box = e.text
     return { isFilled: true }
   })
+  // missionTurn and missionReport open the pane and toast: answer them, whatever the harness does unmocked.
+  on('ui.open', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
   on('fs.write', (_$: unknown, e: any) => {
     disk.set(key(e.path), e.text)
     return { value: undefined }
