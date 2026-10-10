@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SPRITE, rgba, png, ico } from '../src/sparky-pixels.js';
 import { wtFragment, install, uninstall } from '../src/install.js';
+import { backgroundPng } from '../src/sparky-pixels.js';
 import { SPARKY_RGBA } from '../plugin/hooks/sparky-image.ts';
 
 test('the sprite is a symmetric-width 16×16 grid', () => {
@@ -45,11 +46,30 @@ test('the mod carries the same 16×16 pixels', () => {
 });
 
 test('the Windows Terminal fragment adds a Spark profile with Sparky as icon and the Spark scheme', () => {
-  const f = wtFragment('C:\\spark\\assets\\sparky.png');
+  const f = wtFragment('C:\\spark\\assets\\sparky.png', 'ultraviolet', 'C:\\spark\\assets\\bg-ultraviolet.png');
   assert.equal(f.profiles[0].name, 'Spark');
   assert.equal(f.profiles[0].icon, 'C:\\spark\\assets\\sparky.png');
   assert.equal(f.profiles[0].colorScheme, f.schemes[0].name);
   assert.match(f.profiles[0].commandline, /spark$/);
+  assert.equal(f.profiles[0].backgroundImage, 'C:\\spark\\assets\\bg-ultraviolet.png');
+  assert.deepEqual(f.schemes.map((s) => s.name), ['Spark', 'Spark Teal']);
+  assert.equal(wtFragment('i.png', 'teal', 'bg-teal.png').profiles[0].colorScheme, 'Spark Teal');
+});
+
+test('backgrounds are PNGs of the asked size, dark everywhere so text stays readable', () => {
+  for (const theme of ['ultraviolet', 'teal']) {
+    const file = backgroundPng(theme, 64, 36);
+    assert.equal(file.readUInt32BE(16), 64);
+    assert.equal(file.readUInt32BE(20), 36);
+    const raw = inflateSync(file.subarray(41, 41 + file.readUInt32BE(33)));
+    let brightest = 0;
+    for (let y = 0; y < 36; y++)
+      for (let x = 0; x < 64; x++) {
+        const i = y * (1 + 64 * 4) + 1 + x * 4;
+        brightest = Math.max(brightest, raw[i], raw[i + 1], raw[i + 2]);
+      }
+    assert.ok(brightest < 140, `${theme} background peaks at ${brightest}`);
+  }
 });
 
 test('install writes the fragment and Sparky shortcuts; uninstall removes them', () => {
@@ -59,7 +79,7 @@ test('install writes the fragment and Sparky shortcuts; uninstall removes them',
     shortcuts: [join(dir, 'Start Menu', 'Spark.lnk'), join(dir, 'Desktop', 'Spark.lnk')],
     wt: 'C:\\Windows\\System32\\cmd.exe',
   };
-  install({ pngPath: join(dir, 'sparky.png'), icoPath: join(dir, 'sparky.ico'), paths });
+  install({ pngPath: join(dir, 'sparky.png'), icoPath: join(dir, 'sparky.ico'), theme: 'ultraviolet', background: join(dir, 'bg.png'), paths });
   const fragment = JSON.parse(readFileSync(join(paths.fragmentDir, 'spark.json'), 'utf8'));
   assert.equal(fragment.profiles[0].icon, join(dir, 'sparky.png'));
   assert.ok(paths.shortcuts.every((lnk) => existsSync(lnk)));

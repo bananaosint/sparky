@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../src/args.js';
-import { renderBanner } from '../src/banner.js';
 import { sessionSettings, claudeArgs } from '../src/settings.js';
 import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
 import { tryCommand, shellLine } from '../src/failure.js';
-import { install, uninstall } from '../src/install.js';
+import { install, uninstall, writeFragment, installPaths } from '../src/install.js';
+import { frames, playIntro } from '../src/intro.js';
+import { loadConfig, saveConfig } from '../src/config.js';
+import { THEME_NAMES } from '../src/palettes.js';
 import { createSkin } from '../src/skin.js';
 
 
@@ -23,7 +25,9 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
     --direct                    skip Spark's terminal layer, so Claude Code shows its crab again
+    --no-anim                   show Sparky without the startup animation
     --                          pass everything after it to claude
+  spark theme [name]            show or set the look: ultraviolet (default) or teal
   spark install                 add a Spark profile to Windows Terminal and Sparky shortcuts
   spark uninstall               remove them
   spark try <command>           run a command; if it fails, the Spark band offers to send it to Claude
@@ -48,8 +52,16 @@ function loadPty() {
   }
 }
 
-// Runs claude in a pseudo-terminal so its crab can be redrawn as Sparky on the way to the screen.
-function runSkinned(pty, args, env) {
+const configuredTheme = () => {
+  const { theme } = loadConfig();
+  return THEME_NAMES.includes(theme) ? theme : 'ultraviolet';
+};
+
+const assetPath = (name) => join(root, 'assets', name);
+
+// Runs claude in a pseudo-terminal so its crab can be redrawn as Sparky on the way
+// to the screen. Its output waits while the intro plays; claude starts meanwhile.
+async function runSkinned(pty, args, env, theme, intro) {
   const child = pty.spawn('claude.exe', args, {
     name: 'xterm-256color',
     cols: process.stdout.columns,
@@ -57,7 +69,8 @@ function runSkinned(pty, args, env) {
     cwd: process.cwd(),
     env,
   });
-  child.onData(createSkin((text) => process.stdout.write(text)));
+  let held = [];
+  child.onData(createSkin((text) => (held ? held.push(text) : process.stdout.write(text)), { theme }));
   process.stdin.setRawMode(true);
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (data) => child.write(data));
@@ -66,20 +79,29 @@ function runSkinned(pty, args, env) {
     process.stdin.setRawMode(false);
     process.exit(exitCode);
   });
+  await intro();
+  for (const text of held) process.stdout.write(text);
+  held = undefined;
 }
 
-function run({ plain, gemini, direct, passthrough }) {
+function run({ plain, gemini, direct, animate, passthrough }) {
   const key = gemini ? loadKey() : undefined;
-  if (!plain) {
-    const state = !gemini ? 'gemini off' : key ? 'gemini on' : 'gemini off: run spark key set';
-    console.log(`\n${renderBanner({ subline: `${basename(process.cwd())} · ${state}` })}\n`);
-  }
+  const theme = configuredTheme();
+  const state = !gemini ? 'gemini off' : key ? 'gemini on' : 'gemini off: run spark key set';
+  const intro = plain ? undefined : frames({ theme, subline: `${basename(process.cwd())} · ${state}` });
+  const showIntro = async () => {
+    if (!intro) return;
+    if (animate && process.stdout.isTTY && !process.env.NO_COLOR) await playIntro(intro);
+    else console.log(intro.at(-1));
+  };
   const env = { ...process.env };
   if (key) env.SPARK_GEMINI_KEY = key;
+  env.SPARK_THEME = theme;
   if (plain) env.SPARK_PLAIN = '1';
-  const args = claudeArgs({ pluginDir, settings: sessionSettings({ plain }), passthrough });
+  const args = claudeArgs({ pluginDir, settings: sessionSettings({ plain, theme }), passthrough });
   const pty = plain || direct || !process.stdin.isTTY || !process.stdout.isTTY ? undefined : loadPty();
-  if (pty) return runSkinned(pty, args, env);
+  if (pty) return runSkinned(pty, args, env, theme, showIntro);
+  if (intro) console.log(intro.at(-1));
   const child = spawn('claude', args, {
     stdio: 'inherit',
     env,
@@ -177,10 +199,31 @@ switch (args.command) {
     await doctor();
     break;
   case 'install': {
-    const { fragmentDir, shortcuts } = install({ pngPath: join(root, 'assets', 'sparky.png'), icoPath: join(root, 'assets', 'sparky.ico') });
+    const theme = configuredTheme();
+    const { fragmentDir, shortcuts } = install({
+      pngPath: assetPath('sparky.png'),
+      icoPath: assetPath('sparky.ico'),
+      theme,
+      background: assetPath(`bg-${theme}.png`),
+    });
     console.log(`Windows Terminal profile "Spark": ${fragmentDir}`);
     for (const lnk of shortcuts) console.log(`shortcut: ${lnk}`);
     console.log('Restart Windows Terminal to see the Spark profile.');
+    break;
+  }
+  case 'theme': {
+    if (!args.name) {
+      console.log(`theme: ${configuredTheme()} (choices: ${THEME_NAMES.join(', ')})`);
+      break;
+    }
+    if (!THEME_NAMES.includes(args.name)) {
+      console.error(`spark: no theme "${args.name}"; choices: ${THEME_NAMES.join(', ')}`);
+      process.exit(1);
+    }
+    saveConfig({ ...loadConfig(), theme: args.name });
+    if (existsSync(join(installPaths().fragmentDir, 'spark.json')))
+      writeFragment({ pngPath: assetPath('sparky.png'), theme: args.name, background: assetPath(`bg-${args.name}.png`) });
+    console.log(`theme: ${args.name}. New spark sessions use it; restart Windows Terminal to change its background.`);
     break;
   }
   case 'uninstall':

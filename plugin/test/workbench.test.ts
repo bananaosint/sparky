@@ -16,8 +16,8 @@ const band = async ($: Engine) =>
     } as any),
   )
 
-function session(on: any) {
-  mock.env(on, {})
+function session(on: any, env: Record<string, string> = {}) {
+  mock.env(on, env)
   const clock = mock.clock(on)
   on('env.set', () => ({ value: undefined }))
   on('command.register', (_$: unknown, e: any) => ({ value: { command: e.name } }))
@@ -29,6 +29,15 @@ function session(on: any) {
   })
   return { clock, box: () => box }
 }
+
+test('with the teal theme the band face is teal and electric green', async ($, on) => {
+  session(on, { SPARK_THEME: 'teal' })
+  on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  await $.session.start({ cwd: 'C:\\app', surface: 'terminal', isInteractive: true })
+  const shown = await band($)
+  expect(shown).toContain('#39FF14')
+  expect(shown).not.toContain('#A855F7')
+})
 
 test('/sandbox turns the end-of-turn review on and off', async ($) => {
   expect((await runCommand($, 'sandbox')).text).toBe('✦ sandbox on: each turn ends with keep or revert')

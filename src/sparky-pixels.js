@@ -1,7 +1,8 @@
 import { deflateSync, crc32 } from 'node:zlib';
+import { THEMES, gradientAt } from './palettes.js';
 
-// Sparky Bug as 16×16 pixel art. Digits are body pixels, shaded by row from
-// blue to ultraviolet; letters are fixed colors; dots are transparent.
+// Sparky Bug as 16×16 pixel art. Digits are body pixels, shaded by row along the
+// theme's gradient; letters are fixed parts; dots are transparent.
 export const SPRITE = [
   '..B..........B..',
   '..BB........BB..',
@@ -21,38 +22,27 @@ export const SPRITE = [
   '...111....111...',
 ];
 
-const FIXED = {
-  B: [0x7d, 0xf9, 0xff],
-  A: [0xa5, 0xb4, 0xfc],
-  E: [0xf8, 0xfa, 0xfc],
-  P: [0x0b, 0x0a, 0x1f],
-  C: [0x7d, 0xf9, 0xff],
-  W: [0x7d, 0xd3, 0xfc],
-  M: [0x0b, 0x0a, 0x1f],
-};
-const TOP = [0x38, 0xbd, 0xf8];
-const MID = [0x63, 0x66, 0xf1];
-const BOTTOM = [0xa8, 0x55, 0xf7];
+const EYE = [0xf8, 0xfa, 0xfc];
+const DARK = [0x0b, 0x0a, 0x1f];
 
-const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
-const bodyAt = (row) => {
-  const t = (row - 4) / (SPRITE.length - 1 - 4);
-  return t < 0.5 ? mix(TOP, MID, t * 2) : mix(MID, BOTTOM, (t - 0.5) * 2);
-};
+// The sprite as rows of colors, null where transparent.
+export function grid(theme = 'ultraviolet') {
+  const t = THEMES[theme];
+  const fixed = { B: t.bolt, A: t.antenna, E: EYE, P: DARK, C: t.bolt, W: t.wing, M: DARK };
+  return SPRITE.map((line, y) =>
+    [...line].map((ch) => (ch === '.' ? null : (fixed[ch] ?? gradientAt(t.gradient, (y - 4) / (SPRITE.length - 1 - 4))))),
+  );
+}
 
 // RGBA bytes, each sprite pixel drawn as a scale×scale square.
-export function rgba(scale = 1) {
+export function rgba(scale = 1, theme = 'ultraviolet') {
   const size = SPRITE.length * scale;
   const out = Buffer.alloc(size * size * 4);
-  SPRITE.forEach((line, y) =>
-    [...line].forEach((ch, x) => {
-      if (ch === '.') return;
-      const color = FIXED[ch] ?? bodyAt(y);
+  grid(theme).forEach((row, y) =>
+    row.forEach((color, x) => {
+      if (!color) return;
       for (let dy = 0; dy < scale; dy++)
-        for (let dx = 0; dx < scale; dx++) {
-          const i = ((y * scale + dy) * size + x * scale + dx) * 4;
-          out.set([...color, 0xff], i);
-        }
+        for (let dx = 0; dx < scale; dx++) out.set([...color, 0xff], ((y * scale + dy) * size + x * scale + dx) * 4);
     }),
   );
   return out;
@@ -67,22 +57,22 @@ const chunk = (type, data) => {
   return Buffer.concat([head, data, crc]);
 };
 
-export function png(scale = 1) {
-  const size = SPRITE.length * scale;
-  const pixels = rgba(scale);
+export function encodePng(width, height, pixels) {
   const rows = [];
-  for (let y = 0; y < size; y++) rows.push(Buffer.from([0]), pixels.subarray(y * size * 4, (y + 1) * size * 4));
+  for (let y = 0; y < height; y++) rows.push(Buffer.from([0]), pixels.subarray(y * width * 4, (y + 1) * width * 4));
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
   ihdr.set([8, 6, 0, 0, 0], 8);
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(Buffer.concat(rows))),
+    chunk('IDAT', deflateSync(Buffer.concat(rows), { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
+
+export const png = (scale = 1, theme = 'ultraviolet') => encodePng(SPRITE.length * scale, SPRITE.length * scale, rgba(scale, theme));
 
 // A Windows .ico holding PNG images, which Windows reads since Vista.
 export function ico(scales = [1, 2, 3, 16]) {
@@ -102,4 +92,24 @@ export function ico(scales = [1, 2, 3, 16]) {
     offset += data.length;
   });
   return Buffer.concat([header, ...images.map((i) => i.data)]);
+}
+
+// The terminal background: a dark diagonal gradient with two soft glows of the theme's colors.
+export function backgroundPng(theme, width = 960, height = 540) {
+  const { from, to, glows } = THEMES[theme].background;
+  const out = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      const u = x / (width - 1);
+      const v = y / (height - 1);
+      const color = from.map((c, k) => c + (to[k] - c) * (u * 0.6 + v * 0.4));
+      for (const g of glows) {
+        // Distance in screen proportions, so the glows are round on a wide terminal.
+        const d2 = (u - g.x) ** 2 + (((v - g.y) * height) / width) ** 2;
+        const w = g.strength * Math.exp(-d2 / 0.09);
+        for (let k = 0; k < 3; k++) color[k] += (g.color[k] - color[k]) * w;
+      }
+      out.set([...color.map((c) => Math.round(c)), 0xff], (y * width + x) * 4);
+    }
+  return encodePng(width, height, out);
 }

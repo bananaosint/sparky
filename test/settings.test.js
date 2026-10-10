@@ -15,6 +15,10 @@ test('session settings cap subagent depth and concurrency', () => {
   assert.equal(env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS, '2');
 });
 
+test('the teal theme selects the teal Claude Code theme', () => {
+  assert.equal(sessionSettings({ theme: 'teal' }).theme, 'custom:spark:spark-teal');
+});
+
 test('plain mode drops the theme and spinner verbs', () => {
   const s = sessionSettings({ plain: true });
   assert.equal(s.theme, undefined);

@@ -48,10 +48,13 @@ const ROUTE_MODELS = 'gemini-3.5-flash-lite,gemini-3.1-flash-lite'
 
 // Sparky's face in the banner's blue-to-ultraviolet gradient, a color per cell.
 const LABEL_COLORS = ['#38BDF8', '#38BDF8', '#4C8EF5', '#6366F1', '#7A5EF3', '#915AF5', '#A855F7']
+const TEAL_LABEL_COLORS = ['#5EEAD4', '#5EEAD4', '#2DD4BF', '#14B8A6', '#22C55E', '#2FE070', '#39FF14']
 const ERROR = '#FB7185'
 
 // --plain and NO_COLOR get the plain label instead of a face.
 let plainBand = false
+// The launcher's theme (spark theme), handed over as SPARK_THEME.
+let labelColors = LABEL_COLORS
 
 const models = (list: unknown) =>
   String(list)
@@ -458,6 +461,7 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'anti-slop', description: MODE_DESCRIPTIONS['anti-slop'] })
     await $.command.register({ name: 'spark-modes', description: 'Spark: show active modes, or "off" to clear them', argumentHint: '[off]' })
     plainBand = Boolean((await $.env.get('SPARK_PLAIN')) || (await $.env.get('NO_COLOR')))
+    labelColors = (await $.env.get('SPARK_THEME')) === 'teal' ? TEAL_LABEL_COLORS : LABEL_COLORS
     await startWorkbench($)
     return next(e)
   })
@@ -709,7 +713,7 @@ export const register: Register = (on, options) => {
           {Image ? <Image source={{ rgba: SPARKY_RGBA, width: 16, height: 16 }} columns={2} rows={1} alt=" " /> : null}
           {Image ? <Text> </Text> : null}
           {[...(plainBand ? '✦ spark' : face)].map((ch, i) => (
-            <Text color={failure ? ERROR : LABEL_COLORS[i]} bold>
+            <Text color={failure ? ERROR : labelColors[i]} bold>
               {ch}
             </Text>
           ))}

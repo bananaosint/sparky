@@ -52,6 +52,13 @@ test('the arms-up pose is recognised as the top row', () => {
   assert.equal(line.slice(11), 'Claude Code');
 });
 
+test('the teal theme draws Sparky in teal and electric green', () => {
+  let out = '';
+  createSkin((s) => (out += s), { theme: 'teal', setTimer: () => {}, clearTimer: () => {} })(HEADER);
+  assert.ok(out.includes('38;2;94;234;212'));
+  assert.equal(out.includes('38;2;67;133;255'), false);
+});
+
 test('everything else passes through byte for byte', () => {
   const other = `${E}[38;2;74;222;128m\n█████░░░ 60%${E}[m\n plain text ▐ with a block${E}[K\n`;
   assert.equal(skinned([other]), other);

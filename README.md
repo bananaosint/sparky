@@ -2,15 +2,10 @@
 
 Claude Code, launched with a Gemini prompt cook, modes and a Spark look. Windows only.
 
-```
-  ϟ       ϟ
-   ╲▗▄▄▄▖╱     ▄▀▀▀ █▀▀▄ ▄▀▀▄ █▀▀▄ █ ▄▀
-  ▐█◕ ▾ ◕█▌     ▀▀▄ █▀▀  █▀▀█ █▀█  █▀▄
- ◂▐█●▄▄▄●█▌▸   ▀▀▀  ▀    ▀  ▀ ▀  ▀ ▀  ▀
-   ▝▀╯ ╰▀▘
-```
+When `spark` starts, Sparky assembles from scattered pixels, drawn two pixels per character in truecolor. His eyes ignite like a neon tube (flicker, then white-hot cores), the glow bleeds into the pixels around them, he glances left and back, his bolts flash, and the SPARK wordmark sweeps in. It takes under 0.9 s and plays while Claude Code is already starting, so it adds no wait. `--no-anim` shows the final frame only; `--plain` shows nothing.
 
-Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own header follows, with Sparky where the crab was: Spark runs Claude Code in its own pseudo-terminal (`node-pty`) and redraws the crab's cells as Sparky on their way to your screen. `claude.exe` itself is never touched, so it stays signed and keeps updating. `spark --direct` (or `--plain`) runs Claude Code without that layer.
+
+Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon, a dark gradient background and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own header follows, with Sparky where the crab was: Spark runs Claude Code in its own pseudo-terminal (`node-pty`) and redraws the crab's cells as Sparky on their way to your screen. `claude.exe` itself is never touched, so it stays signed and keeps updating. `spark --direct` (or `--plain`) runs Claude Code without that layer.
 
 ## Install
 
@@ -98,6 +93,9 @@ Launcher flags:
 - `--plain`: no banner, theme or spinner verbs
 - `--no-gemini`: send every prompt as typed this session
 - `--direct`: run Claude Code without Spark's terminal layer (you'll see the crab)
+- `--no-anim`: skip Sparky's startup animation
+
+Two looks: `spark theme` shows the current one, `spark theme teal` switches to teal and electric green, `spark theme ultraviolet` switches back. The choice is saved in `%APPDATA%\spark\config.json` and colors the intro, Sparky in the header, the band and the Claude Code theme from the next `spark`; the Windows Terminal background changes after Windows Terminal restarts.
 - Anything else, or everything after `--`, goes to `claude`. For example, `spark -c` continues the last session.
 
 ## What it protects and what it doesn't

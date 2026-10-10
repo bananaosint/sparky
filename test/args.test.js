@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseArgs } from '../src/args.js';
 
 test('no arguments means run', () => {
-  assert.deepEqual(parseArgs([]), { command: 'run', plain: false, gemini: true, direct: false, passthrough: [] });
+  assert.deepEqual(parseArgs([]), { command: 'run', plain: false, gemini: true, direct: false, animate: true, passthrough: [] });
 });
 
 test('spark run strips the word run', () => {
@@ -16,6 +16,7 @@ test('spark flags are consumed, everything else passes through to claude', () =>
     plain: true,
     gemini: false,
     direct: true,
+    animate: true,
     passthrough: ['-c', '--model', 'opus'],
   });
 });
@@ -43,6 +44,13 @@ test('spark try takes the command to run, with or without --', () => {
   assert.deepEqual(parseArgs(['try', 'npm', 'test']), { command: 'try', argv: ['npm', 'test'] });
   assert.deepEqual(parseArgs(['try', '--', 'npm', 'test', '--', '-t', 'login']), { command: 'try', argv: ['npm', 'test', '--', '-t', 'login'] });
   assert.equal(parseArgs(['try']).error, 'spark try needs a command, e.g. spark try npm test');
+});
+
+test('theme subcommand and --no-anim', () => {
+  assert.deepEqual(parseArgs(['theme']), { command: 'theme', name: undefined });
+  assert.deepEqual(parseArgs(['theme', 'teal']), { command: 'theme', name: 'teal' });
+  assert.equal(parseArgs(['--no-anim']).animate, false);
+  assert.equal(parseArgs([]).animate, true);
 });
 
 test('install and uninstall subcommands', () => {

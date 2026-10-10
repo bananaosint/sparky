@@ -1,24 +1,25 @@
 // Claude Code draws its crab as the first columns of three header rows, each
 // row opened with this color and a newline. Spark runs Claude Code in a
 // pseudo-terminal and redraws those cells as Sparky; everything else passes through.
+import { THEMES } from './palettes.js';
+
 const CRAB_FG = '\x1b[38;2;215;119;87m';
 const ROW = /\x1b\[38;2;215;119;87m(\r?\n)((?:\x1b\[[0-9;]*m|[ ▀-▟])+)/g;
 const REGION = /^(\r?\n)?(?:\x1b\[[0-9;]*m|[ ▀-▟])*/;
 const PARTIAL_ESCAPE = /^\x1b(\[[0-9;?<>]*)?$/;
 const SGR = /\x1b\[[0-9;]*m/g;
 
-const BOLT = [0x38, 0xe8, 0xff];
-const BLUE = [0x43, 0x85, 0xff];
-const INDIGO = [0x66, 0x5c, 0xff];
-const VIOLET = [0xb4, 0x5c, 0xff];
 const EYE = [0xf8, 0xfa, 0xfc];
 
-// Sparky in 3×9 cells: [glyph, foreground, background, bold].
-const SPARKY = [
-  [[' '], ['ϟ', BOLT, null, true], ['▗', BLUE], ['▄', BLUE], ['▄', BLUE], ['▄', BLUE], ['▖', BLUE], ['ϟ', BOLT, null, true], [' ']],
-  [['◂', BOLT], ['▐', BLUE], ['◕', EYE, BLUE], [' ', null, BLUE], ['▾', EYE, BLUE], [' ', null, BLUE], ['◕', EYE, BLUE], ['▌', BLUE], ['▸', BOLT]],
-  [[' '], [' '], ['▝', INDIGO], ['▀', INDIGO], ['▀', VIOLET], ['▀', VIOLET], ['▘', VIOLET], [' '], [' ']],
-];
+// Sparky in 3×9 cells, [glyph, foreground, background, bold], in the theme's gradient.
+function sparky(theme) {
+  const [bolt, blue, indigo, violet] = THEMES[theme].gradient;
+  return [
+    [[' '], ['ϟ', bolt, null, true], ['▗', blue], ['▄', blue], ['▄', blue], ['▄', blue], ['▖', blue], ['ϟ', bolt, null, true], [' ']],
+    [['◂', bolt], ['▐', blue], ['◕', EYE, blue], [' ', null, blue], ['▾', EYE, blue], [' ', null, blue], ['◕', EYE, blue], ['▌', blue], ['▸', bolt]],
+    [[' '], [' '], ['▝', indigo], ['▀', indigo], ['▀', violet], ['▀', violet], ['▘', violet], [' '], [' ']],
+  ];
+}
 
 const rgb = (code, [r, g, b]) => `\x1b[${code};2;${r};${g};${b}m`;
 const paint = ([ch, fg, bg, bold]) =>
@@ -30,9 +31,9 @@ function rowOf(visible) {
   return /^( ▐|▗▟)/.test(visible) ? 0 : 1;
 }
 
-function redraw(_match, newline, region) {
+function redraw(rows, newline, region) {
   const visible = region.replace(SGR, '');
-  const cells = SPARKY[rowOf(visible)].map(paint);
+  const cells = rows[rowOf(visible)].map(paint);
   const pad = ' '.repeat(Math.max(0, [...visible].length - cells.length));
   // Colors set after the crab's last cell belong to the text that follows.
   const trailing = region.slice(region.search(/(?:\x1b\[[0-9;]*m)*$/));
@@ -53,11 +54,12 @@ function holdFrom(text) {
   return cut;
 }
 
-export function createSkin(write, { setTimer = setTimeout, clearTimer = clearTimeout, holdMs = 20 } = {}) {
+export function createSkin(write, { theme = 'ultraviolet', setTimer = setTimeout, clearTimer = clearTimeout, holdMs = 20 } = {}) {
+  const rows = sparky(theme);
   let pending = '';
   let timer;
   const emit = (text) => {
-    if (text) write(text.replace(ROW, redraw));
+    if (text) write(text.replace(ROW, (_match, newline, region) => redraw(rows, newline, region)));
   };
   const flush = () => {
     timer = undefined;
