@@ -22,7 +22,7 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
   spark [flags] [claude args]   start Claude Code in this folder
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
-    --direct                    run claude without Spark's terminal layer (Sparky in place of the crab)
+    --direct                    skip Spark's terminal layer, so Claude Code shows its crab again
     --                          pass everything after it to claude
   spark install                 add a Spark profile to Windows Terminal and Sparky shortcuts
   spark uninstall               remove them
