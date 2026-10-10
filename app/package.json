@@ -1,7 +1,7 @@
 {
   "name": "spark-app",
   "productName": "Spark",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Spark: Claude Code in its own window, with Sparky, Gemini-cooked prompts and the Spark look.",
   "private": true,
   "type": "module",

@@ -21,8 +21,9 @@ Invoke-WebRequest $asset.browser_download_url -OutFile $setup -UseBasicParsing
 Start-Process $setup -ArgumentList '/S' -Wait
 Remove-Item $setup
 
-$app = Join-Path $env:LOCALAPPDATA 'Programs\Spark\Spark.exe'
-if (-not (Test-Path $app)) { throw "Spark did not install to $app." }
+# The installer names its folder after the package, so look for Spark.exe rather than guess.
+$app = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter Spark.exe -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if (-not $app) { throw 'Spark did not install under %LOCALAPPDATA%\Programs.' }
 Write-Host "Sparky $($release.tag_name) is installed. Opening Spark..." -ForegroundColor Green
 Write-Host 'If Claude Code is new on this machine, run claude once in a terminal to sign in.' -ForegroundColor DarkGray
 Start-Process $app

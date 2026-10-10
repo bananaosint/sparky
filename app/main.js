@@ -13,6 +13,7 @@ import { loadKey, saveKey, clearKey } from './staged/src/key.js';
 import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
 import { cookPrompt } from './lib/cook.js';
+import { isTrusted, trust, sessionGuard } from './lib/trust.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Installed, the plugin, assets and permission bridge sit beside the app as plain files.
@@ -25,6 +26,8 @@ const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
 let win;
 let cwd;
+// 'trusted' or 'safe' for the open folder: see lib/trust.js.
+let folderMode;
 let claude;
 let sessionId;
 let bridge;
@@ -97,6 +100,7 @@ function startClaude({ resume } = {}) {
     'mcp__spark__approve',
     '--mcp-config',
     JSON.stringify(mcp),
+    ...sessionGuard(folderMode),
     ...(resume ? ['--resume', resume] : []),
   ];
   const child = spawn('claude', args, { cwd, env: base.env, windowsHide: true });
@@ -121,7 +125,25 @@ function startClaude({ resume } = {}) {
     send('exit', { code, error: errors.trim() || undefined });
   });
   win.setTitle(`Spark · ${basename(cwd)}`);
-  send('session', { ...look(base.theme), fresh: !resume, folder: basename(cwd), cwd, state: base.state, settings: settings() });
+  const state = folderMode === 'safe' ? `${base.state} · project settings off` : base.state;
+  send('session', { ...look(base.theme), fresh: !resume, folder: basename(cwd), cwd, state, settings: settings() });
+}
+
+// Asks before a new folder's own Claude Code settings, hooks and MCP servers may run.
+async function decideTrust(folder) {
+  if (isTrusted(loadConfig(), folder)) return 'trusted';
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Trust this folder?',
+    message: `Do you trust the files in ${basename(folder)}?`,
+    detail:
+      "If you trust it, Claude Code loads the folder's own settings, hooks and MCP servers, which can run commands on this computer. Opened safely, Spark ignores them.",
+    buttons: ['Trust this folder', 'Open safely', 'Cancel'],
+    defaultId: 1,
+    cancelId: 2,
+  });
+  if (response === 0) saveConfig(trust(loadConfig(), folder));
+  return [ 'trusted', 'safe', undefined ][response];
 }
 
 async function chooseFolder() {
@@ -135,7 +157,8 @@ ipcMain.on('ready', async () => {
   geminiKey = loadKey() ?? undefined;
   bridge ??= await startBridge();
   cwd = fromArgs ? resolve(fromArgs) : last && isFolder(last) ? last : await chooseFolder();
-  if (!cwd) return app.quit();
+  folderMode = cwd && (await decideTrust(cwd));
+  if (!folderMode) return app.quit();
   startClaude();
 });
 
@@ -155,8 +178,10 @@ ipcMain.on('new-chat', () => {
 
 ipcMain.on('open-folder', async () => {
   const folder = await chooseFolder();
-  if (!folder) return;
+  const mode = folder && (await decideTrust(folder));
+  if (!mode) return;
   cwd = folder;
+  folderMode = mode;
   sessionId = undefined;
   alwaysAllow = new Set();
   startClaude();
