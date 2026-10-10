@@ -154,32 +154,32 @@ test('a failing skills.sh search keeps the installed picks', async ($, on) => {
 
 test('a model that fails three times hands the prompt to the next model in its chain', async ($, on) => {
   const { box, toasts, rewrites, routes } = await cookWith($, on, { status: 503 }, {
-    'gemini-3.8-flash': [429, 429, 429],
-    'gemini-3.7-flash': [500, 500, 500],
+    'gemini-3.6-flash': [429, 429, 429],
+    'gemini-3.5-flash': [500, 500, 500],
     'gemini-3.5-flash-lite': [429, 429, 429],
   })
-  expect(rewrites).toEqual([...Array(3).fill('gemini-3.8-flash'), ...Array(3).fill('gemini-3.7-flash'), 'gemini-3.6-flash'])
+  expect(rewrites).toEqual([...Array(3).fill('gemini-3.6-flash'), ...Array(3).fill('gemini-3.5-flash'), 'gemini-3-flash-preview'])
   expect(routes).toEqual([...Array(3).fill('gemini-3.5-flash-lite'), 'gemini-3.1-flash-lite'])
   expect(toasts).toEqual([])
   expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a slow model gets three tries of 10 seconds, then the next model answers', async ($, on) => {
-  const { box, toasts, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': ['hang', 'hang', 'hang'] }, 31_000)
-  expect(rewrites).toEqual(['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.7-flash'])
+  const { box, toasts, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.6-flash': ['hang', 'hang', 'hang'] }, 31_000)
+  expect(rewrites).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'])
   expect(toasts).toEqual([])
   expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a model that fails once is asked again before the chain moves on', async ($, on) => {
-  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': [503] })
-  expect(rewrites).toEqual(['gemini-3.8-flash', 'gemini-3.8-flash'])
+  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.6-flash': [503] })
+  expect(rewrites).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash'])
   expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a refused key stops the chain instead of trying every model', async ($, on) => {
-  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': [403] })
-  expect(rewrites).toEqual(['gemini-3.8-flash'])
+  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.6-flash': [403] })
+  expect(rewrites).toEqual(['gemini-3.6-flash'])
   expect(box).toBe('add playwright e2e tests for checkout, test first\n\nSkills: tdd')
 })
 

@@ -39,9 +39,10 @@ const MIN_INSTALLS = 1000
 // Tries per model, each up to the timeout, before the next model is asked.
 const TRIES = 3
 
-// Best first, then the ones with the most free daily quota.
+// Fast first (about 2 s each when timed on 2026-10-09), then Gemma for its large
+// free quota, then 3.7 and 3.8, which took 34 s and 82 s and so rarely fit a try.
 const REWRITE_MODELS =
-  'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it'
+  'gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it,gemini-3.7-flash,gemini-3.8-flash'
 const ROUTE_MODELS = 'gemini-3.5-flash-lite,gemini-3.1-flash-lite'
 
 // Sparky's face in the banner's blue-to-ultraviolet gradient, a color per cell.

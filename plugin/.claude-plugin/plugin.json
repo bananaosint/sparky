@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": { "name": "BananaOSINT" },
   "description": "Gemini-cooked prompts, modes and guardrails for Claude Code.",
   "types": "./types/index.d.ts",
@@ -9,7 +9,7 @@
       "type": "string",
       "title": "Rewrite models",
       "description": "Gemini models that rewrite your prompt before you send it, comma-separated; the next is tried when one is out of quota or failing",
-      "default": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it"
+      "default": "gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it,gemini-3.7-flash,gemini-3.8-flash"
     },
     "rewrite_thinking": {
       "type": "string",

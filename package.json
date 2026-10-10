@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "A launcher and mod for Claude Code on Windows: Gemini-cooked prompts, modes, guardrails.",
   "repository": {
