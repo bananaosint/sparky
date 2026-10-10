@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": { "name": "BananaOSINT" },
   "description": "Gemini-cooked prompts, modes and guardrails for Claude Code.",
   "types": "./types/index.d.ts",
@@ -40,8 +40,8 @@
     },
     "timeout_ms": {
       "type": "number",
-      "title": "Gemini timeout (ms)",
-      "description": "After this long the prompt stays as typed",
+      "title": "Gemini timeout per try (ms)",
+      "description": "How long one Gemini call may take. Each model gets three tries before the next model is asked",
       "default": 10000,
       "min": 1000,
       "max": 30000

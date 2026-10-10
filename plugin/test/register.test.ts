@@ -78,8 +78,10 @@ test('with a key the first Enter is held for cooking, Enter while cooking sends 
 type Registry = { status: number; skills?: object[] }
 
 // Cooks one prompt with Gemini and skills.sh answered by the test; returns what landed.
-// `refuse` maps a model to the HTTP status it answers instead.
-async function cookWith($: Engine, on: any, registry: Registry, refuse: Record<string, number> = {}) {
+// `refuse` lists, per model, what its next calls give instead of an answer: an
+// HTTP status, or 'hang' for a call that never returns. `waitMs` is how long the
+// test lets the cook run.
+async function cookWith($: Engine, on: any, registry: Registry, refuse: Record<string, (number | 'hang')[]> = {}, waitMs = 30) {
   mock.env(on, { SPARK_GEMINI_KEY: 'test-key' })
   const clock = mock.clock(on)
   on('env.set', () => ({ value: undefined }))
@@ -111,7 +113,9 @@ async function cookWith($: Engine, on: any, registry: Registry, refuse: Record<s
     const model = e.url.match(/models\/([^:]+):/)[1]
     if (system.startsWith('You rewrite')) rewrites.push(model)
     if (system.startsWith('You pick')) routes.push(model)
-    if (refuse[model]) return respond(refuse[model], { error: { code: refuse[model] } })
+    const outcome = refuse[model]?.shift()
+    if (outcome === 'hang') return new Promise(() => {})
+    if (outcome) return respond(outcome, { error: { code: outcome } })
     if (system.startsWith('You rewrite')) return answer({ prompt: 'Add Playwright e2e tests for checkout, test first.', unclear: [] })
     if (system.startsWith('You pick')) return answer({ skills: ['tdd'], search: ['playwright e2e'] })
     return answer({ install: ['microsoft/playwright@playwright', 'nobody/tiny@playwright-lite'] })
@@ -119,8 +123,10 @@ async function cookWith($: Engine, on: any, registry: Registry, refuse: Record<s
   await $.session.start({ cwd: 'C:\\code\\app', surface: 'terminal', isInteractive: true })
 
   await typePrompt($, 'add playwright e2e tests for checkout, test first')
-  await clock.advance(30)
-  await clock.settle()
+  for (let ms = 0; ms < waitMs; ms += 1000) {
+    await clock.advance(Math.min(1000, waitMs - ms))
+    await clock.settle()
+  }
   return { box, searched, toasts, rewrites, routes }
 }
 
@@ -146,20 +152,33 @@ test('a failing skills.sh search keeps the installed picks', async ($, on) => {
   expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
-test('a model out of quota or failing hands the prompt to the next model in its chain', async ($, on) => {
+test('a model that fails three times hands the prompt to the next model in its chain', async ($, on) => {
   const { box, toasts, rewrites, routes } = await cookWith($, on, { status: 503 }, {
-    'gemini-3.8-flash': 429,
-    'gemini-3.7-flash': 500,
-    'gemini-3.5-flash-lite': 429,
+    'gemini-3.8-flash': [429, 429, 429],
+    'gemini-3.7-flash': [500, 500, 500],
+    'gemini-3.5-flash-lite': [429, 429, 429],
   })
-  expect(rewrites).toEqual(['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'])
-  expect(routes).toEqual(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
+  expect(rewrites).toEqual([...Array(3).fill('gemini-3.8-flash'), ...Array(3).fill('gemini-3.7-flash'), 'gemini-3.6-flash'])
+  expect(routes).toEqual([...Array(3).fill('gemini-3.5-flash-lite'), 'gemini-3.1-flash-lite'])
   expect(toasts).toEqual([])
   expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
+test('a slow model gets three tries of 10 seconds, then the next model answers', async ($, on) => {
+  const { box, toasts, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': ['hang', 'hang', 'hang'] }, 31_000)
+  expect(rewrites).toEqual(['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.7-flash'])
+  expect(toasts).toEqual([])
+  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+})
+
+test('a model that fails once is asked again before the chain moves on', async ($, on) => {
+  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': [503] })
+  expect(rewrites).toEqual(['gemini-3.8-flash', 'gemini-3.8-flash'])
+  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+})
+
 test('a refused key stops the chain instead of trying every model', async ($, on) => {
-  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': 403 })
+  const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.8-flash': [403] })
   expect(rewrites).toEqual(['gemini-3.8-flash'])
   expect(box).toBe('add playwright e2e tests for checkout, test first\n\nSkills: tdd')
 })

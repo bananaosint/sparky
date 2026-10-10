@@ -36,6 +36,9 @@ const IDLE: CookPhase = { kind: 'idle' }
 // The find-skills bar for a registry skill worth suggesting.
 const MIN_INSTALLS = 1000
 
+// Tries per model, each up to the timeout, before the next model is asked.
+const TRIES = 3
+
 // Best first, then the ones with the most free daily quota.
 const REWRITE_MODELS =
   'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it'
@@ -91,18 +94,18 @@ async function firstAnswer(
   key: string,
   models: readonly string[],
   body: Parameters<typeof forModel>[1],
-  deadline: number,
+  timeoutMs: number,
 ): Promise<{ model: string; answer: unknown }> {
   let last: unknown = new Error('no Gemini model to try')
   for (const model of models) {
-    const ms = deadline - (await $.clock.now())
-    if (ms <= 0) break
-    try {
-      return { model, answer: await gemini($, key, model, forModel(model, body), ms) }
-    } catch (err) {
-      const status = (err as { status?: number }).status
-      if (status === undefined || status === 401 || status === 403) throw err
-      last = err
+    for (let attempt = 0; attempt < TRIES; attempt++) {
+      try {
+        return { model, answer: await gemini($, key, model, forModel(model, body), timeoutMs) }
+      } catch (err) {
+        const status = (err as { status?: number }).status
+        if (status === 401 || status === 403) throw err
+        last = err
+      }
     }
   }
   throw last
@@ -132,27 +135,26 @@ async function searchRegistry($: EngineInterface, queries: readonly string[], in
 }
 
 // Picks installed skills; when Gemini says they miss something, searches
-// skills.sh and asks Gemini which hits to install. Everything shares the cook's
-// deadline, and a failed search keeps the installed picks.
+// skills.sh and asks Gemini which hits to install. A failed search keeps the
+// installed picks.
 async function routeSkills(
   $: EngineInterface,
   key: string,
   prompt: string,
   skills: readonly SkillInfo[],
   config: Config,
-  deadline: number,
 ): Promise<{ skills: string[]; install: RemoteSkill[] }> {
   if (!skills.length && !config.skillSearch) return { skills: [], install: [] }
   const body = routeRequest(prompt, skills, 'minimal', config.skillSearch)
-  const { answer } = await firstAnswer($, key, config.routeModels, body, deadline)
+  const { answer } = await firstAnswer($, key, config.routeModels, body, config.timeoutMs)
   const route = parseRoute(answer, new Set(skills.map((s) => s.name)))
   const room = Math.min(3, MAX_SKILLS - route.skills.length)
   if (!config.skillSearch || !route.search.length || room <= 0) return { skills: route.skills, install: [] }
   try {
-    const candidates = await searchRegistry($, route.search, skills, deadline - (await $.clock.now()))
+    const candidates = await searchRegistry($, route.search, skills, config.timeoutMs)
     if (!candidates.length) return { skills: route.skills, install: [] }
     const ask = pickRequest(prompt, route.skills, candidates, room, 'minimal')
-    const picked = parsePick((await firstAnswer($, key, config.routeModels, ask, deadline)).answer, new Set(candidates.map((c) => c.id)), room)
+    const picked = parsePick((await firstAnswer($, key, config.routeModels, ask, config.timeoutMs)).answer, new Set(candidates.map((c) => c.id)), room)
     return { skills: route.skills, install: picked.map((id) => candidates.find((c) => c.id === id)!) }
   } catch {
     return { skills: route.skills, install: [] }
@@ -176,8 +178,8 @@ async function cook($: EngineInterface, raw: string, id: number, config: Config)
   const skills = await skillsOnOffer($)
 
   const [rewritten, routed] = await Promise.allSettled([
-    firstAnswer($, key!, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), startedAt + config.timeoutMs),
-    routeSkills($, key!, safe, skills, config, startedAt + config.timeoutMs),
+    firstAnswer($, key!, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs),
+    routeSkills($, key!, safe, skills, config),
   ])
   const ms = (await $.clock.now()) - startedAt
 
