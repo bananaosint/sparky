@@ -1,6 +1,10 @@
 /* global marked, DOMPurify, spark */
 import { parseCommand, withModes, MODELS, EFFORTS } from './lib/commands.js';
+import { parseMarathon, statusLine, clock, tierOf } from './lib/marathon.js';
 import { costLine } from './lib/account.js';
+import { elapsed } from './lib/elapsed.js';
+import { doubleTab } from './lib/keys.js';
+import { voxelize, project, closeEyes } from './lib/voxel.js';
 import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +49,8 @@ let modes = [];
 let who = { label: 'Claude', billed: false, note: 'priced at API rates' };
 let model = '';
 let turnTools = 0;
+// The running marathon as main.js last reported it, for the header.
+let marathonState = null;
 // Skills Gemini picked for the prompt in the box, and which model picked them.
 let picked = { skills: [], model: '' };
 // The recent chat, for Gemini's quick answers.
@@ -103,7 +109,8 @@ function tick(now) {
     if (!a.canvas.isConnected) actors.delete(a);
     if (!a.canvas.offsetParent || !look.sprite.length) continue;
     const t = now - a.start;
-    const o = { sprite: look.sprite, glow: look.glow, hat, look: pupils(a.canvas), ...a.opts, ...a.once };
+    const seconds = thinking ? (now - thinking.started) / 1000 : 0;
+    const o = { sprite: look.sprite, glow: look.glow, hat, look: pupils(a.canvas), seconds, ...a.opts, ...a.once };
     const f = frameAt(a.name, t, o);
     paint(a.canvas, f.pixels);
     if (!still.matches) {
@@ -157,6 +164,90 @@ for (const a of [mini, hero])
     pokes = [];
     play(a, 'charge', { level: 5 });
   });
+
+// ---------- Sparky in 3D, on the welcome screen ----------
+
+// He turns toward the pointer, bobs, blinks now and then, spins when dragged and flips when clicked.
+// Reduced motion: one still frame, slightly turned.
+const stage = $('hero3d');
+const pen = stage.getContext('2d');
+let shapes = null;
+let spriteShaped = null;
+const pose = { yaw: -0.45, pitch: 0.15, spin: 0, offset: 0 };
+let dragFrom = null;
+let flipStart = -Infinity;
+let blinkAt = performance.now() + 2500;
+
+function shapeSparky() {
+  if (spriteShaped === look.sprite || !look.sprite.length) return;
+  spriteShaped = look.sprite;
+  shapes = { open: voxelize(look.sprite).faces, shut: voxelize(closeEyes(look.sprite)).faces };
+  $('hero-wrap').classList.add('three');
+}
+
+function drawSparky3d(now) {
+  shapeSparky();
+  if (!shapes) return;
+  const box = stage.getBoundingClientRect();
+  const toward = (at, mid, span) => (gaze && !still.matches ? Math.max(-1, Math.min(1, (at - mid) / span)) : 0);
+  const lookX = toward(gaze?.x, box.left + box.width / 2, innerWidth / 2);
+  const lookY = toward(gaze?.y, box.top + box.height / 2, innerHeight / 2);
+  // Ease toward where the pointer is; a drag or a fling adds its own turn on top. With motion
+  // reduced he settles at once and doesn't coast.
+  const ease = still.matches ? 1 : 0.08;
+  pose.yaw += (lookX * 0.7 - 0.2 - pose.yaw) * ease;
+  pose.pitch += (0.15 + lookY * 0.3 - pose.pitch) * ease;
+  if (still.matches) pose.spin = 0;
+  if (!dragFrom) {
+    pose.offset += pose.spin;
+    pose.spin *= 0.94;
+  }
+  const flip = Math.min(1, (now - flipStart) / 700);
+  const flipTurn = flip < 1 ? (1 - (1 - flip) ** 3) * Math.PI * 2 : 0;
+  if (now > blinkAt + 140) blinkAt = now + 2500 + Math.random() * 3500;
+  const eyes = now >= blinkAt && !still.matches ? shapes.shut : shapes.open;
+  const bob = still.matches ? 0 : Math.sin(now / 650) * 6;
+  const polys = project(eyes, { yaw: pose.yaw + pose.offset, pitch: pose.pitch + flipTurn, scale: 14, cx: stage.width / 2, cy: stage.height / 2 + bob });
+  pen.clearRect(0, 0, stage.width, stage.height);
+  for (const p of polys) {
+    pen.beginPath();
+    p.points.forEach(([x, y], i) => (i ? pen.lineTo(x, y) : pen.moveTo(x, y)));
+    pen.closePath();
+    pen.fillStyle = pen.strokeStyle = p.fill;
+    pen.fill();
+    // A hairline in the face's own colour closes the seams canvas antialiasing leaves between quads.
+    pen.stroke();
+  }
+}
+
+// With motion reduced, a frame a second is enough to catch a new theme or the first sprite.
+(function loop(now) {
+  if (!$('welcome').hidden) drawSparky3d(now);
+  if (still.matches) setTimeout(() => requestAnimationFrame(loop), 1000);
+  else requestAnimationFrame(loop);
+})(performance.now());
+
+stage.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  dragFrom = { x: e.clientX, offset: pose.offset, moved: 0, last: e.clientX };
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!dragFrom) return;
+  pose.spin = (e.clientX - dragFrom.last) * 0.012;
+  dragFrom.last = e.clientX;
+  dragFrom.moved = Math.max(dragFrom.moved, Math.abs(e.clientX - dragFrom.x));
+  pose.offset = dragFrom.offset + (e.clientX - dragFrom.x) * 0.012;
+  if (still.matches) drawSparky3d(performance.now());
+});
+stage.addEventListener('pointerup', () => {
+  // A press that barely moved is a poke: he flips (the flat Sparky's poke handler adds the sparks).
+  if (dragFrom && dragFrom.moved < 4 && !still.matches) flipStart = performance.now();
+  if (dragFrom && dragFrom.moved >= 4) stage.addEventListener('click', (e) => e.stopPropagation(), { capture: true, once: true });
+  dragFrom = null;
+});
+// A drag the system takes away (the window loses the pointer) just ends, with no poke.
+stage.addEventListener('pointercancel', () => (dragFrom = null));
 
 // ---------- messages ----------
 
@@ -261,12 +352,13 @@ function setThinking(on) {
   const started = performance.now();
   let verb = VERBS[Math.floor(Math.random() * VERBS.length)];
   const tick = () => {
-    const s = Math.round((performance.now() - started) / 1000);
+    const ms = performance.now() - started;
+    const s = Math.round(ms / 1000);
     if (s && s % 6 === 0) verb = VERBS[(VERBS.indexOf(verb) + 1) % VERBS.length];
-    label.textContent = `${verb}… ${s}s`;
+    label.textContent = `${verb}… ${elapsed(ms)}`;
   };
   tick();
-  thinking = { el: node, timer: setInterval(tick, 1000) };
+  thinking = { el: node, timer: setInterval(tick, 1000), started };
   actor(canvas, 'work');
   append(document.createDocumentFragment());
 }
@@ -307,10 +399,19 @@ function assistant() {
 // The header: the folder, then who answers and how hard it thinks, then Gemini's state.
 function renderStatus() {
   const where = cwd.replace(/^[A-Za-z]:\\Users\\[^\\]+/, '~');
-  const answering = settings.model === 'gemini' ? 'Gemini quick answers' : model || 'Claude';
-  const effort = settings.model !== 'gemini' && settings.effort !== 'default' ? ` · ${settings.effort} effort` : '';
-  $('status').textContent = `${where} · ${answering}${effort} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
-  $('status').title = cwd;
+  const answering =
+    settings.model === 'gemini'
+      ? 'Gemini quick answers'
+      : settings.model === 'auto'
+        ? `Auto · ${settings.autoModels.length} models`
+        : settings.model === 'ultracode'
+          ? `UltraCode · ${settings.ultraModel}`
+          : model || 'Claude';
+  const effort =
+    settings.model === 'ultracode' ? ' · max effort' : !['gemini', 'auto'].includes(settings.model) && settings.effort !== 'default' ? ` · ${settings.effort} effort` : '';
+  const marathon = marathonState ? ` · ${statusLine(marathonState, Date.now())}` : '';
+  $('status').textContent = `${where} · ${answering}${effort}${marathon} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
+  $('status').title = marathonState ? $('status').textContent : cwd;
   hat = settings.model in HATS ? settings.model : undefined;
   renderEngine();
 }
@@ -370,21 +471,54 @@ spark.on('event', (event) => {
     if (!t) return;
     t.card.classList.remove('running');
     t.card.classList.add(event.isError ? 'failed' : 'done');
+    // Only a working Sparky flinches, so a cheer or an alert plays out.
+    if (event.isError) for (const a of actors) if (a.name === 'work') play(a, 'flinch');
     if (event.output) t.body.append(el('pre', event.isError ? 'output error' : 'output', event.output.slice(0, 20000)));
   }
   if (event.kind === 'result') {
     streaming = null;
     setBusy(false);
-    both((a) => play(a, event.ok ? 'cheer' : 'oops'));
-    const seconds = (event.durationMs / 1000).toFixed(1);
+    both((a) => play(a, event.ok ? 'cheer' : 'oops', { tools: turnTools }));
     const line = el(
       'div',
       event.ok ? 'result' : 'result failed',
-      event.ok ? `✦ done in ${seconds}s · ${costLine({ ...event, model, tools: turnTools }, who)}` : `✗ ${event.text || 'the turn ended with an error'}`,
+      event.ok ? `✦ done in ${elapsed(event.durationMs)} ·${costLine({ ...event, model, tools: turnTools }, who)}` : `✗ ${event.text || 'the turn ended with an error'}`,
     );
     line.title = `The price Claude Code reports for this turn at API rates: the model, the tokens it read and wrote, and its tool calls. ${who.label}: ${who.note}. Gemini rewrites and skill picks use your Gemini key's Google project.`;
     append(line);
   }
+});
+
+spark.on('marathon', (m) => {
+  marathonState = m.kind === 'end' ? null : m.state;
+  const say = (text, cls = 'result') => append(el('div', cls, text));
+  if (m.kind === 'start') {
+    say(`✦ marathon started · ${statusLine(m.state, Date.now())}. Spark keeps Claude working in review passes until a budget runs out.`);
+    if (!settings.autoEdits) say('✦ auto-accept edits is off, so each file edit waits for your click while the clock runs. Turn it on in ⚙ settings for an unattended run.');
+  }
+  if (m.kind === 'pass') {
+    turnTools = 0;
+    setBusy(true);
+    say(`✦ marathon pass ${m.state.pass} · ${m.lens} · ${statusLine(m.state, Date.now())}`);
+  }
+  if (m.kind === 'wait') say(`✦ marathon: the last ${m.state.idle} passes found nothing, so the next one waits ${clock(m.ms)}`);
+  if (m.kind === 'switched') {
+    model = m.tier;
+    say(`✦ marathon moved Claude to ${m.tier}: the last passes found nothing to change`);
+  }
+  if (m.kind === 'switch-failed') say(`✗ marathon could not move to ${m.tier} (${m.error}); carrying on with the current model`, 'result failed');
+  // The model was put back when it ended; the header follows.
+  if (m.kind === 'end' && tierOf(model) === model) model = tierOf(settings.model) ?? '';
+  if (m.kind === 'end') say(`✦ marathon over: ${m.reason} · ${m.summary}`, m.reason.startsWith('a turn failed') ? 'result failed' : 'result');
+  renderStatus();
+});
+// The time left ticks down between events.
+setInterval(() => marathonState && renderStatus(), 15_000);
+
+spark.on('ultra', () => {
+  turnTools = 0;
+  setBusy(true);
+  append(el('div', 'result', '✦ UltraCode review pass: checking the change against your request'));
 });
 
 spark.on('permission', ({ id, tool, input, note }) => {
@@ -429,8 +563,7 @@ spark.on('session', (s) => {
   renderStatus();
   $('folder').textContent = s.folder;
   $('where').textContent = ` in ${s.folder}`;
-  $('cook-toggle').classList.toggle('on', settings.cook && settings.hasKey);
-  setBusy(false);
+  if (!s.keepBusy) setBusy(false);
   if (s.fresh) {
     list.replaceChildren($('welcome'));
     $('welcome').hidden = false;
@@ -523,6 +656,50 @@ async function askGemini(text) {
   append(el('div', 'result', `✦ quick answer by ${answer.model} · on your Gemini key's Google project (free tier or its billing), not your Claude plan`));
 }
 
+// Bumped by each Auto question and by ■, so only the latest question's answer lands.
+let autoRun = 0;
+let autoActive = false;
+
+// Auto answers in the window: several models at once, one merged answer, and each model's own
+// answer folded away underneath.
+async function askAuto(text) {
+  const images = attachments.map(({ mediaType, data }) => ({ mediaType, data }));
+  addUser(text, attachments);
+  remember({ role: 'user', text, images });
+  clearBox();
+  setBusy(true);
+  const started = performance.now();
+  const run = ++autoRun;
+  autoActive = true;
+  const out = await spark.auto(history);
+  // ■ was pressed, or another Auto started since: this answer is no longer wanted.
+  if (run !== autoRun) return;
+  autoActive = false;
+  setBusy(false);
+  if (out.error) return append(el('div', 'result failed', `✗ Auto: ${out.error}`));
+  const bubble = el('div', 'msg assistant auto');
+  bubble.innerHTML = markdown(out.text);
+  const by = out.judge ? `${out.judge} merged ${out.picked.join(', ') || 'the answers'}` : `${out.picked[0]} answered alone`;
+  bubble.prepend(el('div', 'badge', `✦ Auto · ${by}`));
+  const each = el('div', 'auto-answers');
+  for (const a of out.answers) {
+    const fold = el('details');
+    fold.append(el('summary', a.error ? 'failed' : '', a.error ? `${a.model} · no answer (${a.error})` : `${a.model}'s own answer`));
+    if (a.text) {
+      const body = el('div');
+      body.innerHTML = markdown(a.text);
+      fold.append(body);
+    }
+    each.append(fold);
+  }
+  bubble.append(each);
+  append(bubble);
+  remember({ role: 'assistant', text: out.text });
+  const answered = out.answers.filter((a) => a.text).length;
+  const merge = out.judgeError ? ` · the merge failed (${out.judgeError}), so this is ${out.picked[0]}'s answer` : '';
+  append(el('div', 'result', `✦ Auto answered in ${elapsed(performance.now() - started)} · ${answered} of ${out.answers.length} models · Claude models count toward your plan, Gemini runs on your key${merge}`));
+}
+
 async function setSetting(changes) {
   const before = settings;
   settings = await spark.setSettings(changes);
@@ -530,10 +707,30 @@ async function setSetting(changes) {
   if (before.model !== settings.model || before.effort !== settings.effort) powerUp();
 }
 
+// /marathon <task> [--time 1.5h] [--tokens 2m] starts one, bare shows what is left, stop ends it.
+function marathonCommand(args) {
+  const parsed = parseMarathon(args);
+  if (parsed.error) return note(parsed.error);
+  if (parsed.status || parsed.stop) {
+    input.value = '';
+    autosize();
+    if (parsed.stop) return spark.marathon({ action: 'stop' });
+    return note(marathonState ? statusLine(marathonState, Date.now()) : 'no marathon running · /marathon <task> [--time 1.5h] [--tokens 2m]');
+  }
+  if (settings.model === 'gemini' || settings.model === 'auto') return note('a marathon needs Claude Code: pick a Claude model or UltraCode first');
+  if (marathonState) return note('a marathon is already running · /marathon stop ends it');
+  spark.marathon({ action: 'start', task: parsed.task, limits: parsed.limits });
+  sendNow(parsed.task);
+}
+
 // Spark's own slash commands act here; any other /command goes to Claude Code as typed.
 function runCommand(text) {
   const command = parseCommand(text);
   if (!command || command.kind === 'passthrough') return false;
+  if (command.kind === 'marathon') {
+    marathonCommand(command.args);
+    return true;
+  }
   if (command.kind === 'mode') {
     modes = modes.includes(command.mode) ? modes.filter((m) => m !== command.mode) : [...modes, command.mode];
     note(`${command.mode} ${modes.includes(command.mode) ? 'on' : 'off'}`);
@@ -545,6 +742,9 @@ function runCommand(text) {
   renderChips();
   return true;
 }
+
+// Bumped by every send, so a rewrite that lands after Tab Tab sent the typed words is dropped.
+let cookRun = 0;
 
 // Enter cooks the prompt with Gemini first (rewrite and skill picks, as set); Enter again
 // sends what the box holds. A leading \ sends as typed.
@@ -562,8 +762,10 @@ async function submit() {
     if (cook) {
       composer.classList.add('cooking');
       both((a) => setBase(a, 'cook'));
-      note(settings.cook ? 'cooking with Gemini…' : 'picking skills with Gemini…');
+      note(settings.cook ? 'cooking with Gemini… · Tab Tab sends yours as typed' : 'picking skills with Gemini…');
+      const run = ++cookRun;
       const result = await spark.cook(text);
+      if (run !== cookRun) return;
       composer.classList.remove('cooking');
       both((a) => {
         setBase(a, 'idle');
@@ -577,11 +779,48 @@ async function submit() {
       renderChips();
       composer.classList.add('cooked');
       const by = [result.model && `rewritten by ${result.model}`, result.rewriteError && `not rewritten (${result.rewriteError})`, !picked.skills.length && result.skillsModel && 'no skills needed'].filter(Boolean);
-      return note(`${by.join(' · ')}${by.length ? ' · ' : ''}edit freely · Enter sends · Esc restores yours`);
+      return note(`${by.join(' · ')}${by.length ? ' · ' : ''}edit freely · Enter sends · Tab Tab sends yours as typed · Esc restores yours`);
     }
   }
-  return settings.model === 'gemini' ? askGemini(text) : sendNow(text);
+  return settings.model === 'gemini' ? askGemini(text) : settings.model === 'auto' ? askAuto(text) : sendNow(text);
 }
+
+// Tab Tab: what was typed goes out as typed, never rewritten, but with the skills Gemini
+// picked (or picks now, when skill picks are on and none were picked yet).
+async function sendTyped() {
+  if (busy) return note('Sparky is still working: wait, or press ■ to stop.');
+  // A leading \ means "as typed" already; it isn't part of the prompt.
+  const typed = (cookedFrom ?? input.value).trim().replace(/^\\\s*/, '');
+  if (!typed) return;
+  cookRun++;
+  composer.classList.remove('cooking');
+  both((a) => setBase(a, 'idle'));
+  if (typed.startsWith('/')) {
+    input.value = typed;
+    cookedFrom = null;
+    return submit();
+  }
+  if (settings.model === 'gemini') return askGemini(typed);
+  if (settings.model === 'auto') return askAuto(typed);
+  let text = picked.skills.length ? `${typed}\n\nSkills: ${picked.skills.join(', ')}` : typed;
+  if (!picked.skills.length && settings.pickSkills && settings.hasKey) {
+    note('picking skills with Gemini…');
+    const run = cookRun;
+    const result = await spark.cook(typed, { rewrite: false });
+    if (run !== cookRun) return;
+    if (!result.error) text = result.text;
+  }
+  sendNow(text);
+}
+
+const tabTab = doubleTab();
+input.addEventListener('keydown', (e) => {
+  // With an empty box Tab moves focus as usual; with text in it, Tab waits for its pair.
+  if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey || !input.value.trim()) return;
+  e.preventDefault();
+  if (tabTab(performance.now())) sendTyped();
+  else note('Tab again sends what you typed, as typed');
+});
 
 composer.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -619,7 +858,13 @@ composer.addEventListener('drop', (e) => {
 });
 
 $('stop').addEventListener('click', () => {
-  spark.stop();
+  // Auto runs beside Claude Code, not in it: stop its models, and leave the session alone.
+  if (autoActive) {
+    autoRun++;
+    autoActive = false;
+    spark.cancelAuto();
+    setBusy(false);
+  } else spark.stop();
   append(el('div', 'result', '■ stopped'));
 });
 $('new').addEventListener('click', () => spark.newChat());
@@ -628,12 +873,6 @@ $('theme').addEventListener('click', async () => {
   look = { ...look, ...(await spark.toggleTheme()) };
   document.body.className = look.theme;
   both((a) => play(a, 'charge'));
-});
-$('cook-toggle').addEventListener('click', async () => {
-  if (!settings.hasKey) return $('gear').click();
-  await setSetting({ cook: !settings.cook });
-  $('cook-toggle').classList.toggle('on', settings.cook);
-  note(settings.cook ? 'Gemini rewrites your prompts' : 'Gemini rewriting off: prompts go as typed');
 });
 for (const chip of document.querySelectorAll('.chip'))
   chip.addEventListener('click', () => {
@@ -651,7 +890,9 @@ list.addEventListener('click', (e) => {
 // ---------- power core: model and effort ----------
 
 const MODEL_INFO = {
-  default: { name: 'Auto', tag: 'your plan’s pick', blurb: 'Claude Code’s default model for your plan.', depth: 0, speed: 0 },
+  default: { name: 'Default', tag: 'your plan’s pick', blurb: 'Claude Code’s default model for your plan.', depth: 0, speed: 0 },
+  auto: { name: 'Auto', tag: 'best of several', blurb: 'Asks several models at once, then the strongest merges the best answer. Answers only: no tools, no files.', depth: 5, speed: 1 },
+  ultracode: { name: 'UltraCode', tag: 'max effort + review', blurb: 'The strongest model at max effort, and a review pass after each turn you start.', depth: 5, speed: 1 },
   opus: { name: 'Opus', tag: 'deepest thinker', blurb: 'Hard bugs, big refactors, careful plans.', depth: 5, speed: 2 },
   sonnet: { name: 'Sonnet', tag: 'everyday builder', blurb: 'Fast and sharp for most coding work.', depth: 4, speed: 4 },
   haiku: { name: 'Haiku', tag: 'fastest Claude', blurb: 'Quick edits and small questions.', depth: 2, speed: 5 },
@@ -741,15 +982,20 @@ function renderEngine() {
   if (!model) return;
   const info = MODEL_INFO[model];
   const gemini = model === 'gemini';
-  const level = levelOf(effort);
+  const auto = model === 'auto';
+  const ultra = model === 'ultracode';
+  // Gemini and Auto answer in the window; UltraCode always runs at max: none of them take the effort bar.
+  const fixed = gemini || auto || ultra;
+  const level = ultra ? 5 : levelOf(effort);
   $('engine').className = `engine tone-${model}`;
   $('engine-name').textContent = info.name;
-  $('engine-effort').textContent = gemini ? 'quick' : level ? effort : 'auto';
-  $('engine-meter').hidden = gemini;
+  $('engine-effort').textContent = gemini ? 'quick' : auto ? 'compare' : ultra ? 'max' : level ? effort : 'auto';
+  $('engine-meter').hidden = gemini || auto;
   $('engine-meter').classList.toggle('max', level === 5);
   [...$('engine-meter').children].forEach((pip, i) => pip.classList.toggle('on', i < level));
   drawHat();
-  $('core-line').textContent = gemini ? info.blurb : `${info.name} at ${level ? effort : 'auto'} effort. ${info.blurb}`;
+  $('core-line').textContent =
+    gemini || auto ? info.blurb : ultra ? `UltraCode on ${settings.ultraModel} at max effort. ${info.blurb}` : `${info.name} at ${level ? effort : 'auto'} effort. ${info.blurb}`;
   for (const card of cards) {
     const on = card.dataset.model === model;
     card.classList.toggle('on', on);
@@ -758,10 +1004,12 @@ function renderEngine() {
   }
   panel.className = `tone-${model}${busy ? ' locked' : ''}`;
   $('core-lock').hidden = !busy;
-  $('effort-box').classList.toggle('off', gemini);
+  $('effort-box').classList.toggle('off', fixed);
   $('gemini-note').hidden = !gemini;
+  $('auto-note').hidden = !auto;
+  $('ultra-note').hidden = !ultra;
   $('effort-auto').classList.toggle('on', !level);
-  track.tabIndex = gemini ? -1 : 0;
+  track.tabIndex = fixed ? -1 : 0;
   showEffort(level);
 }
 
@@ -831,14 +1079,41 @@ $('gear').addEventListener('click', () => {
   $('cook').checked = settings.cook;
   $('pick-skills').checked = settings.pickSkills;
   $('auto-edits').checked = settings.autoEdits;
+  $('auto-models').replaceChildren(
+    ...settings.autoChoices.map((m) => {
+      const box = el('input');
+      box.type = 'checkbox';
+      box.value = m;
+      box.checked = settings.autoModels.includes(m);
+      const label = el('label', 'check');
+      label.append(box, ` ${m}`);
+      return label;
+    }),
+  );
+  $('ultra-model').replaceChildren(
+    ...settings.ultraChoices.map((m) => {
+      const option = el('option', '', m);
+      option.value = m;
+      option.selected = m === settings.ultraModel;
+      return option;
+    }),
+  );
   $('key').value = '';
   $('key-state').textContent = settings.hasKey ? 'A key is saved (encrypted for your Windows account). Paste a new one to replace it.' : 'No key yet: without one, prompts are sent as typed.';
   $('settings').showModal();
 });
 $('save-settings').addEventListener('click', async () => {
   const key = $('key').value.trim();
-  await setSetting({ cook: $('cook').checked, pickSkills: $('pick-skills').checked, autoEdits: $('auto-edits').checked, ...(key ? { key } : {}) });
-  $('cook-toggle').classList.toggle('on', settings.cook && settings.hasKey);
+  const autoModels = [...$('auto-models').querySelectorAll('input:checked')].map((box) => box.value);
+  if (!autoModels.length) return note('pick at least one model for Auto');
+  await setSetting({
+    cook: $('cook').checked,
+    pickSkills: $('pick-skills').checked,
+    autoEdits: $('auto-edits').checked,
+    autoModels,
+    ultraModel: $('ultra-model').value,
+    ...(key ? { key } : {}),
+  });
   $('settings').close();
 });
 

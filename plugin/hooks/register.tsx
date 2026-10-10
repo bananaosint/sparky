@@ -209,7 +209,7 @@ async function cook($: EngineInterface, raw: string, id: number, config: Config)
     : rewritten.status === 'rejected'
       ? `rewrite failed: ${String(rewritten.reason?.message ?? rewritten.reason)}`
       : 'rewrite came back empty'
-  const text = restore(composeCooked(rewrite ?? { prompt: raw, unclear: [] }, picked, install))
+  const text = restore(composeCooked(rewrite ? { ...rewrite, by: model } : { prompt: raw, unclear: [] }, picked, install))
 
   const box = await $.prompt.read()
   if (box.text !== raw) {
@@ -238,10 +238,10 @@ async function promptify($: EngineInterface, text: string, key: string, config: 
   if (choice !== 'Promptify') return text
   try {
     const { text: safe, restore } = redact(text)
-    const { answer } = await firstAnswer($, key, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs)
+    const { answer, model } = await firstAnswer($, key, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs)
     const rewrite = parseRewrite(answer)
     if (!rewrite) throw new Error('the rewrite came back empty')
-    const cooked = restore(composeCooked(rewrite, []))
+    const cooked = restore(composeCooked({ ...rewrite, by: model }, []))
     const pick = await $.ui.ask(`Gemini's version:\n\n${cooked}`, ["Send Gemini's version", 'Send mine as typed'])
     return pick === "Send Gemini's version" ? cooked : text
   } catch (err) {

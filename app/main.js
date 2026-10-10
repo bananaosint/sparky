@@ -12,10 +12,14 @@ import { loadConfig, saveConfig } from './staged/src/config.js';
 import { loadKey, saveKey, clearKey } from './staged/src/key.js';
 import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
+import { EDIT_TOOLS } from './lib/marathon.js';
+import { createMarathon } from './lib/marathon-runner.js';
 import { cookPrompt, quickAnswer } from './lib/cook.js';
+import { DEFAULT_AUTO_MODELS, CLAUDE_AUTO_MODELS, isClaude, autoAnswer, runClaude } from './lib/auto.js';
+import { sessionModelArgs, reviewDue, REVIEW_PASS } from './lib/ultracode.js';
 import { describeSkills, listSkills } from './lib/skills.js';
 import { payer } from './lib/account.js';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { isTrusted, trust, sessionGuard, sessionEnv } from './lib/trust.js';
 import { gateNote } from './lib/gate.js';
 
@@ -27,10 +31,11 @@ const pluginDir = join(resources, 'plugin');
 const { userConfig } = JSON.parse(readFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8'));
 const REWRITE_MODELS = userConfig.rewrite_models.default.split(',');
 const ROUTE_MODELS = userConfig.route_models.default.split(',');
-// The Claude models the picker offers, as Claude Code's --model aliases; 'gemini' answers in the window.
-const CLAUDE_MODELS = new Set(['opus', 'sonnet', 'haiku']);
-// Tools that only change files: "auto-accept edits" lets these run without asking.
-const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+// What ⚙ settings offers for Auto (Claude aliases, then the Gemini models Spark knows) and UltraCode.
+const AUTO_CHOICES = [...CLAUDE_AUTO_MODELS, ...new Set([...REWRITE_MODELS, ...ROUTE_MODELS])];
+const ULTRA_CHOICES = ['fable', 'opus', 'sonnet'];
+// One model in Auto gets this long before its answer is left out.
+const AUTO_TIMEOUT_MS = 180_000;
 
 let win;
 let cwd;
@@ -45,6 +50,21 @@ let alwaysAllow = new Set();
 let skillInfo = [];
 // Permission questions waiting on the window, by id.
 const pending = new Map();
+// Keeps Claude working for a time or token budget (lib/marathon.js); idle until /marathon starts one.
+const marathon = createMarathon({
+  write: (line) => claude?.stdin.write(`${line}\n`),
+  notify: (message) => send('marathon', message),
+  now: Date.now,
+  top: () => (loadConfig().marathonTop === 'fable' ? 'fable' : 'opus'),
+});
+// The --model and --effort the running Claude Code process started with.
+let runningArgs = [];
+// Whether the turn running answers the person (UltraCode reviews those once, never its own review
+// or a marathon's), and whether it changed files.
+let fromUser = false;
+let turnEdited = false;
+// Auto's one-shot Claude processes, so ■ can stop them.
+const autoChildren = new Set();
 
 const send = (channel, data) => win?.webContents.send(channel, data);
 const rgb = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
@@ -60,6 +80,10 @@ function settings() {
     autoEdits: c.autoEdits === true,
     model: c.model ?? 'default',
     effort: c.effort ?? 'default',
+    autoModels: Array.isArray(c.autoModels) ? c.autoModels.filter((m) => AUTO_CHOICES.includes(m)) : DEFAULT_AUTO_MODELS,
+    ultraModel: ULTRA_CHOICES.includes(c.ultraModel) ? c.ultraModel : 'fable',
+    autoChoices: AUTO_CHOICES,
+    ultraChoices: ULTRA_CHOICES,
     hasKey: Boolean(geminiKey),
   };
 }
@@ -98,13 +122,15 @@ function startBridge() {
 function stopClaude() {
   const child = claude;
   claude = undefined;
+  marathon.restarted();
   child?.kill();
   for (const answer of pending.values()) answer({ allow: false, message: 'Stopped from Spark.' });
   pending.clear();
 }
 
 // Claude Code runs headless: messages go in and events come out as JSON lines.
-function startClaude({ resume } = {}) {
+// `keepBusy`: a message is on its way, so the window must not drop its working state.
+function startClaude({ resume, keepBusy = false } = {}) {
   stopClaude();
   saveConfig({ ...loadConfig(), lastFolder: cwd });
   // Claude Code names its skills only once the first message is in; until then, read them from disk.
@@ -133,8 +159,7 @@ function startClaude({ resume } = {}) {
     '--mcp-config',
     JSON.stringify(mcp),
     ...sessionGuard(folderMode),
-    ...(CLAUDE_MODELS.has(settings().model) ? ['--model', settings().model] : []),
-    ...(settings().effort !== 'default' ? ['--effort', settings().effort] : []),
+    ...(runningArgs = sessionModelArgs(settings()) ?? runningArgs),
     ...(resume ? ['--resume', resume] : []),
   ];
   const child = spawn('claude', args, { cwd, env: sessionEnv(folderMode, base.env), windowsHide: true });
@@ -149,6 +174,15 @@ function startClaude({ resume } = {}) {
         send('payer', payer({ apiKeySource: event.apiKeySource, account: account() }));
       }
       send('event', event);
+      if (event.kind === 'tool' && EDIT_TOOLS.has(event.name)) turnEdited = true;
+      const inMarathon = marathon.running();
+      marathon.onEvent(event);
+      if (event.kind === 'result' && reviewDue({ model: settings().model, fromUser, marathon: inMarathon, edited: turnEdited }, event)) {
+        turnEdited = false;
+        fromUser = false;
+        child.stdin.write(`${userMessage({ text: REVIEW_PASS })}\n`);
+        send('ultra', { kind: 'review' });
+      }
     }
   });
   child.stderr.on('data', (chunk) => (errors = (errors + chunk).slice(-4000)));
@@ -160,11 +194,12 @@ function startClaude({ resume } = {}) {
   child.on('exit', (code) => {
     if (claude !== child) return;
     claude = undefined;
+    marathon.end('Claude Code stopped', { restore: false });
     send('exit', { code, error: errors.trim() || undefined });
   });
   win.setTitle(`Spark · ${basename(cwd)}`);
   const state = folderMode === 'safe' ? `${base.state} · project settings off` : base.state;
-  send('session', { ...look(base.theme), fresh: !resume, folder: basename(cwd), cwd, state, settings: settings() });
+  send('session', { ...look(base.theme), fresh: !resume, keepBusy, folder: basename(cwd), cwd, state, settings: settings() });
 }
 
 // Asks before a new folder's own Claude Code settings, hooks and MCP servers may run.
@@ -201,12 +236,24 @@ ipcMain.on('ready', async () => {
 });
 
 ipcMain.on('send-message', (_e, message) => {
-  if (!claude) startClaude({ resume: sessionId });
-  claude.stdin.write(`${userMessage(message)}\n`);
+  if (!claude) startClaude({ resume: sessionId, keepBusy: true });
+  fromUser = !marathon.running();
+  turnEdited = false;
+  claude.stdin.write(`${userMessage(marathon.outgoing(message))}\n`);
+});
+
+ipcMain.on('marathon', (_e, request) => {
+  if (request.action === 'stop') return marathon.end('you stopped it', { restore: true });
+  // A restart would end the marathon being set up.
+  if (!claude) startClaude({ resume: sessionId, keepBusy: true });
+  marathon.start({ task: request.task, limits: request.limits, picker: settings().model });
 });
 
 // Stopping ends the running turn; the conversation carries on in a fresh process.
-ipcMain.on('stop', () => startClaude({ resume: sessionId }));
+ipcMain.on('stop', () => {
+  marathon.end('you pressed stop', { restore: false });
+  startClaude({ resume: sessionId });
+});
 
 ipcMain.on('new-chat', () => {
   sessionId = undefined;
@@ -231,13 +278,14 @@ ipcMain.on('permission-answer', (_e, { id, tool, allow, always }) => {
   pending.delete(id);
 });
 
-ipcMain.handle('cook', async (_e, text) => {
+// `rewrite: false` picks skills only: Tab Tab sends the typed prompt with them.
+ipcMain.handle('cook', async (_e, text, { rewrite } = {}) => {
   if (!geminiKey) return { error: 'no Gemini key; add one in settings' };
   const s = settings();
   try {
     return await cookPrompt(text, {
       key: geminiKey,
-      rewrite: s.cook,
+      rewrite: rewrite ?? s.cook,
       pickSkills: s.pickSkills,
       skills: skillInfo,
       rewriteModels: REWRITE_MODELS,
@@ -257,6 +305,34 @@ ipcMain.handle('quick', async (_e, history) => {
   }
 });
 
+// Auto: every chosen model answers the chat, then a judge merges the best answer (lib/auto.js).
+// Claude members run one-shot from a scratch folder, so no project files or settings reach them.
+ipcMain.handle('auto', async (_e, history) => {
+  const env = { ...process.env };
+  delete env.SPARK_GEMINI_KEY;
+  const ask = (model, system, conversation) => {
+    const tracked = (...args) => {
+      const child = spawn(...args);
+      autoChildren.add(child);
+      child.on('close', () => autoChildren.delete(child));
+      return child;
+    };
+    if (isClaude(model)) return runClaude(model, system, conversation, { spawn: tracked, cwd: tmpdir(), env, timeoutMs: AUTO_TIMEOUT_MS });
+    if (!geminiKey) return Promise.reject(new Error('no Gemini key'));
+    return quickAnswer(conversation, { key: geminiKey, rewriteModels: [model], system, tries: 1, timeoutMs: AUTO_TIMEOUT_MS }).then((a) => a.text);
+  };
+  try {
+    return await autoAnswer(history, { models: settings().autoModels, ask, timeoutMs: AUTO_TIMEOUT_MS });
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ■ during Auto: its Claude processes stop; the window drops whatever still comes back.
+ipcMain.on('auto-cancel', () => {
+  for (const child of autoChildren) child.kill();
+});
+
 ipcMain.handle('toggle-theme', () => {
   const next = THEME_NAMES[(THEME_NAMES.indexOf(configuredTheme()) + 1) % THEME_NAMES.length];
   saveConfig({ ...loadConfig(), theme: next });
@@ -265,13 +341,11 @@ ipcMain.handle('toggle-theme', () => {
 });
 
 ipcMain.handle('set-settings', (_e, { key, ...changes }) => {
-  const before = settings();
-  const known = ['cook', 'pickSkills', 'autoEdits', 'model', 'effort'];
+  const known = ['cook', 'pickSkills', 'autoEdits', 'model', 'effort', 'autoModels', 'ultraModel'];
   saveConfig({ ...loadConfig(), ...Object.fromEntries(Object.entries(changes).filter(([name, v]) => known.includes(name) && v !== undefined)) });
-  const after = settings();
   // A different Claude model or effort takes a restart; the conversation carries on.
-  const claudeChanged = (before.model !== after.model && CLAUDE_MODELS.has(after.model)) || before.effort !== after.effort;
-  if (claudeChanged && cwd) startClaude({ resume: sessionId });
+  const wanted = sessionModelArgs(settings());
+  if (wanted && JSON.stringify(wanted) !== JSON.stringify(runningArgs) && cwd) startClaude({ resume: sessionId });
   if (key !== undefined) {
     if (key) saveKey(key);
     else clearKey();

@@ -46,6 +46,14 @@ test('parseRewrite reads the role without a leading "Act as" or trailing period'
   expect(parseRewrite(r)).toEqual({ prompt: 'P', unclear: [], role: 'a CSV sommelier with 300 years of spreadsheet tasting' })
 })
 
+test('the rewrite asks for an in-depth prompt: 2 to 4 headed sections of 3 to 6 bullets', () => {
+  const system = rewriteRequest('add dark mode', 'low').systemInstruction.parts[0]!.text
+  expect(system).toContain('2 to 4 sections, each opening with a Markdown "## " header')
+  expect(system).toContain('3 to 6 "- " bullets under each header')
+  expect(system).toContain('the agent is told Gemini rewrote it')
+  expect(system).not.toContain('no headings')
+})
+
 test('parseRewrite rejects empty or malformed answers', () => {
   expect(parseRewrite(reply('not json'))).toBeUndefined()
   expect(parseRewrite(reply('{"prompt":"   "}'))).toBeUndefined()

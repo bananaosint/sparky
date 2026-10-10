@@ -26,9 +26,12 @@
 
     <main id="messages">
       <section id="welcome">
-        <span class="sparky" id="hero-wrap"><canvas id="hero" width="16" height="16" aria-hidden="true"></canvas></span>
+        <span class="sparky" id="hero-wrap" title="Drag to spin Sparky, click to poke him"
+          ><canvas id="hero" width="16" height="16" aria-hidden="true"></canvas
+          ><canvas id="hero3d" width="336" height="336" aria-hidden="true"></canvas
+        ></span>
         <h1>What are we building<span id="where"></span>?</h1>
-        <p class="hint">Ask in plain words. Gemini sharpens your prompt first; Enter again sends it.</p>
+        <p class="hint">Ask in plain words. Gemini sharpens your prompt first; Enter again sends it, Tab Tab sends yours as typed.</p>
         <div class="chips">
           <button class="chip">Explain how this project is put together</button>
           <button class="chip">Find a bug in this codebase and fix it, test first</button>
@@ -43,10 +46,9 @@
       <textarea
         id="input"
         rows="1"
-        placeholder="Ask Sparky to build something…   Enter sends · Shift+Enter new line · Ctrl+V pastes images · /antislop, /model, /effort"
+        placeholder="Ask Sparky to build something…   Enter: Gemini rewrites, Enter again sends · Tab Tab sends as typed · Shift+Enter new line · /marathon, /model"
       ></textarea>
       <div class="composer-bar">
-        <button type="button" id="cook-toggle" class="pill" title="Rewrite prompts with Gemini before sending">⚡ Cook</button>
         <button type="button" id="engine" class="engine" popovertarget="engine-panel" title="Who answers, and how hard it thinks">
           <canvas id="engine-hat" width="6" height="4" aria-hidden="true"></canvas>
           <span id="engine-name" class="engine-name"></span>
@@ -79,6 +81,8 @@
           <p id="effort-blurb" class="effort-blurb"></p>
         </div>
         <p id="gemini-note" class="core-note" hidden>Gemini quick answers have no effort level: they come back fast, without tools or files.</p>
+        <p id="auto-note" class="core-note" hidden>Auto asks several models at once and merges the best answer. Answers only: no tools, no files. Pick the models in ⚙ settings.</p>
+        <p id="ultra-note" class="core-note" hidden>UltraCode always runs at max effort, and reviews each turn once before it hands back.</p>
         <p id="core-lock" class="core-note lock" hidden>Sparky is mid-turn. Switch when he’s done, or press ■ to stop him.</p>
       </div>
     </form>
@@ -93,6 +97,14 @@
         <label class="check"><input id="cook" type="checkbox" /> Rewrite my prompts with Gemini before sending</label>
         <label class="check"><input id="pick-skills" type="checkbox" /> Let Gemini pick the skills Claude should use</label>
         <label class="check"><input id="auto-edits" type="checkbox" /> Let Claude edit files without asking</label>
+        <fieldset class="model-set">
+          <legend>Auto asks these models, then the first Claude one merges the best answer</legend>
+          <div id="auto-models" class="model-checks"></div>
+        </fieldset>
+        <label class="row">UltraCode runs
+          <select id="ultra-model"></select>
+        </label>
+        <p class="hint">at max effort, with a review pass after each turn you start.</p>
         <div class="dialog-actions">
           <button type="button" id="save-settings">Save</button>
           <button value="close">Close</button>

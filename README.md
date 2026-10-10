@@ -27,20 +27,41 @@ It installs Claude Code too if it's missing, downloads the latest Spark installe
 
 ## The app
 
-- **Its own look:** pixel-art Sparky assembles on the welcome screen and stays alive: his eyes follow your mouse and watch you type, he works with crackling antennas while Claude runs, cheers when a turn lands, goes ×_× and smokes when one fails, jumps at permission questions, swirls while Gemini cooks, dozes off with floating z’s when left alone, and giggles when you click him (five quick clicks overloads him). He wears the hat of the model answering: a crown for Opus, a beret for Sonnet, a blossom for Haiku, a star for Gemini. Ultraviolet or teal gradient themes (◐ in the header), glass panels, glowing composer.
+- **Its own look:** pixel-art Sparky assembles on the welcome screen and stays alive: his eyes follow your mouse and watch you type, he works with crackling antennas while Claude runs (sparking faster after 30 seconds, squinting and sweating after two minutes), flinches when a tool call fails, cheers when a turn lands (bigger bursts and shockwave rings after turns with 10 or more tool calls), goes ×_× and smokes when one fails, jumps at permission questions, swirls while Gemini cooks, dozes off with floating z’s when left alone, and giggles when you click him (five quick clicks overloads him). On the welcome screen he stands in 3D: a voxel Sparky built from the same pixels, rounded in the middle, lit from the upper left, bobbing, blinking and turning toward your pointer; drag to spin him, click and he flips. With reduced motion on he stands still. He wears the hat of the model answering: a crown for Opus, a beret for Sonnet, a blossom for Haiku, a star for Gemini. Ultraviolet or teal gradient themes (◐ in the header), glass panels, glowing composer.
 - **Chat, not a terminal:** Claude's answers stream in as formatted text; every tool call is a card (shell commands, edits as diffs, file writes, searches, to-do lists) you can open for details and output.
 - **You approve tools:** when Claude wants to run a command or change a file, a card asks: Allow, Always allow (that tool, this chat), or Deny. Settings can let file edits through without asking.
-- **Gemini cooks your prompt:** Enter sends your words to Gemini, which rewrites them clearly (with a suitably dramatic role); the rewrite lands in the box to edit, Enter again sends it, Esc restores yours, a leading `\` skips it. Add a Gemini API key in ⚙ settings ([free key](https://aistudio.google.com/apikey)); it's stored encrypted for your Windows account.
+- **Gemini cooks your prompt:** Enter sends your words to Gemini, which rewrites them in depth (2 to 4 headed sections of 3 to 6 bullets, with a suitably dramatic role) and adds a line telling Claude that Gemini rewrote it; the rewrite lands in the box to edit, Enter again sends it, Esc restores yours. **Tab Tab** sends what you typed, as typed, with the skills Gemini picked (it picks them first if it hasn't yet). A leading `\` also skips the rewrite; turn rewriting off in ⚙ settings. Add a Gemini API key in ⚙ settings ([free key](https://aistudio.google.com/apikey)); it's stored encrypted for your Windows account.
 - **Images:** Ctrl+V pastes a screenshot into the message, or drag an image in.
 - **Skills:** Gemini (flash-lite) picks which of your installed skills Claude should use; they show as chips above the box and ride along in a `Skills:` line.
-- **Models:** the **Power Core** next to the box picks who answers: Auto, Claude Opus, Sonnet or Haiku, each a card with its own Sparky, or **Gemini · quick answers** for fast replies that never touch your files or your Claude plan. Drag the effort bar from low to max (arrow keys work; hovering previews how charged Sparky gets); `/model sonnet` and `/effort high` still work. Every switch charges Sparky up.
+- **Models:** the **Power Core** next to the box picks who answers: Default (Claude Code's pick for your plan), Claude Opus, Sonnet or Haiku, each a card with its own Sparky, **Gemini · quick answers** for fast replies that never touch your files or your Claude plan, and two modes:
+  - **Auto** asks several models at once (Opus, Fable, Gemini 3.1 Flash Lite and Gemini 3.7 Flash unless you pick others in ⚙ settings), then the first Claude model among them merges the best answer. The bubble names who merged what, and each model's own answer folds open underneath. Answers only: no tools, no files. Claude models run as one-shot `claude -p` calls with no tools, no settings and no MCP servers, from a scratch folder, on your plan; Gemini models on your key. A model that fails or takes over 3 minutes is left out and named.
+  - **UltraCode** runs Claude Code on Fable (or Opus or Sonnet, set in ⚙) at max effort, and after each turn you start sends one review pass: check the change against your request, run the tests, fix what's wrong, else "Nothing found." Not during a marathon, which has its own passes.
+
+  Sparky's answers in the window (Gemini and Auto) also come in 2 to 4 headed sections of 3 to 6 bullets. The thread's timer and "done in" line read `mm:ss`, or `hh:mm:ss` past an hour. Drag the effort bar from low to max (arrow keys work; hovering previews how charged Sparky gets); `/model sonnet` and `/effort high` still work. Every switch charges Sparky up.
 - **Modes:** `/antislop` (also `/red-team`, `/grillme`) turns a Spark mode on for every message; its chip turns it off. Other `/commands` go straight to Claude Code.
+- **Marathons:** `/marathon <task> [--time 1.5h] [--tokens 2m]` keeps Claude working on a task, in short review passes, until the time or the tokens run out, even when the task looks finished. See [Marathons](#marathons).
 - **What it costs, and who pays:** after each turn: the API-rate price Claude Code reports, the model, tokens in and out, tool calls, and whether it counts toward your Claude plan (not billed per message) or is billed to an API key. Gemini answers say they run on your Gemini key's project.
 - **Header:** the folder you're in, the model answering, the effort level.
-- **Settings:** turn off Gemini's rewriting, its skill picks, or both.
+- **Settings:** turn off Gemini's rewriting, its skill picks, or both; pick Auto's models and UltraCode's model.
 - **Folders and chats:** the header button opens another project folder; ＋ New starts a fresh chat; ■ stops Claude mid-turn and keeps the conversation.
 
 Spark keeps Claude Code's own configuration, sign-in, and Spark's guardrails (MISP rules, snapshots) underneath.
+
+## Marathons
+
+`/marathon fix the parser --time 1.5h --tokens 2m` (in the app) sends your task, then a new pass each time Claude finishes, until a budget runs out. `/marathon` shows what is left; `/marathon stop` ends it. The header counts down.
+
+- **Time** keeps it going: Claude is not allowed to be done early. A pass already running isn't cut off; the limit is checked when a turn ends.
+- **Tokens** are a cap, counted as `/goal` counts them: input, output and cache writes, never cache reads. Whichever limit comes first ends it. Flags left out default to 30 minutes and 500k.
+- **Passes** each check one thing: your request against the code, bugs, the tests and build, simplifying, attacking the change, docs and names, then around again. A pass changes code only for a requirement or a failing test, and otherwise answers "Nothing found."
+- **Stronger models:** after two passes in a row that edit nothing, with at least half of both budgets left, Spark moves Claude up one model: haiku, sonnet, opus. Never down. Fable comes after opus only if `"marathonTop": "fable"` is in `%APPDATA%\spark\config.json`. When the marathon ends, the model you picked is put back.
+- **Backoff:** once Claude is on the strongest model, passes that find nothing wait 15 seconds, then 30, 60 and so on up to 5 minutes, instead of re-reading an unchanged project every few seconds.
+- **Questions:** if Claude's last message ends with a question, no pass is sent until you answer.
+- **Ends** at a limit, on a failed turn, on ■, on New chat or a folder change.
+
+What it costs: every model switch makes Claude re-read the whole conversation at full price, because the prompt cache belongs to one model. Passes that find nothing still cost tokens. The time limit is the only bound on them besides the token cap.
+
+What it doesn't cover: time spent waiting on a permission card counts, so turn on auto-accept edits in settings for an unattended run. Shell commands that change files aren't seen as edits. A Spark halt (two failures in a row) isn't visible to the app, so a halted marathon keeps sending passes. The terminal version has no `/marathon` yet.
 
 ## Terminal version
 

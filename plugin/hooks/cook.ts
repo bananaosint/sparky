@@ -11,7 +11,8 @@ export type CookConfig = { enabled: boolean; minWords: number }
 
 export type Decision = { action: 'cook' } | { action: 'offer' } | { action: 'send'; text: string; notice?: string }
 
-export type Rewrite = { prompt: string; unclear: string[]; role?: string }
+// `by` names the Gemini model that rewrote the prompt; absent when it went out as typed.
+export type Rewrite = { prompt: string; unclear: string[]; role?: string; by?: string }
 
 const send = (text: string, notice?: string): Decision => (notice ? { action: 'send', text, notice } : { action: 'send', text })
 
@@ -53,6 +54,9 @@ export function composeCooked(
   install: readonly { id: string; installs: number }[] = [],
 ): string {
   const parts = [rewrite.prompt.trim()]
+  // Claude should know the words aren't quite the developer's, so a mismatch gets a question, not a guess.
+  if (rewrite.by)
+    parts.unshift(`(Gemini (${rewrite.by}) rewrote this prompt from what I typed. If part of it seems to contradict what I meant, ask me.)`)
   if (rewrite.role) parts.unshift(`Act as ${rewrite.role}.`)
   if (rewrite.unclear.length) parts.push(`Ask me before starting:\n${rewrite.unclear.map((q) => `- ${q}`).join('\n')}`)
   if (skills.length) parts.push(`Skills: ${skills.join(', ')}`)

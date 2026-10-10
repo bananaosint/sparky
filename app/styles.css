@@ -93,10 +93,18 @@ body {
   filter: drop-shadow(0 0 8px color-mix(in srgb, var(--c3) 50%, transparent));
 }
 
+.brand {
+  min-width: 0;
+}
+
 .status {
   margin-top: 4px;
   font-size: 12px;
   color: #929db3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status .sep {
@@ -612,17 +620,6 @@ pre.output.error {
   color: #b7c0d4;
 }
 
-.pill {
-  background: transparent;
-  color: #929db3;
-}
-
-.pill.on {
-  color: #0b0d14;
-  background: linear-gradient(90deg, var(--c1), var(--c4));
-  border-color: transparent;
-}
-
 .send,
 .stop {
   width: 38px;
@@ -675,7 +672,8 @@ dialog h2 {
   font-weight: 600;
 }
 
-.row input {
+.row input,
+.row select {
   padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--c3) 45%, transparent);
@@ -778,6 +776,31 @@ dialog h2 {
   -webkit-app-region: no-drag;
 }
 
+#hero3d {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 168px;
+  height: 168px;
+  cursor: grab;
+  touch-action: none;
+  animation: glow-big 4.5s ease-in-out infinite;
+}
+
+#hero3d:active {
+  cursor: grabbing;
+}
+
+/* Once the 3D Sparky draws, he stands over the flat one, which stays laid out but unseen so its
+   poke and overload sparks still fly around him. */
+#hero-wrap.three #hero {
+  visibility: hidden;
+}
+
+#hero-wrap.three #hero3d {
+  display: block;
+}
+
 .particle {
   position: absolute;
   left: calc(var(--x) * var(--px));
@@ -848,6 +871,14 @@ dialog h2 {
   }
 }
 
+/* A teardrop: one sharp corner, turned to point up. */
+.particle.sweat {
+  border-radius: 50% 0 50% 50%;
+  rotate: -45deg;
+  background: #9fdcff;
+  box-shadow: 0 0 calc(var(--px) * 1.2) #5ab8ff;
+}
+
 .particle.ring {
   width: calc(var(--px) * 6);
   height: calc(var(--px) * 6);
@@ -885,6 +916,42 @@ dialog h2 {
 }
 .tone-gemini {
   --tone: #8ab4ff;
+}
+.model-set {
+  margin: 12px 0 4px;
+  padding: 8px 12px 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 30%, transparent);
+  border-radius: 12px;
+}
+
+.model-set legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: #929db3;
+}
+
+.model-checks {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 16px;
+}
+
+.auto-answers summary {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #929db3;
+  cursor: pointer;
+}
+
+.auto-answers .failed {
+  color: #ff8a9c;
+}
+
+.tone-auto {
+  --tone: #5eead4;
+}
+.tone-ultracode {
+  --tone: #ff7a59;
 }
 
 .engine {
@@ -996,7 +1063,7 @@ dialog h2 {
   position-try-fallbacks: flip-block;
   inset: auto;
   margin: 0 0 12px;
-  width: min(640px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
   padding: 18px 18px 14px;
   overflow: visible;
   color: #e8edf7;
@@ -1094,7 +1161,7 @@ dialog h2 {
 
 .models {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 8px;
   margin-bottom: 16px;
 }
