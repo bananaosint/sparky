@@ -11,7 +11,7 @@
   </head>
   <body class="ultraviolet">
     <header id="bar">
-      <canvas id="mini" width="16" height="16" aria-hidden="true"></canvas>
+      <span class="sparky" id="mini-wrap" title="Sparky"><canvas id="mini" width="16" height="16" aria-hidden="true"></canvas></span>
       <div class="brand">
         <div class="word">SPARK</div>
         <div id="status" class="status">starting…</div>
@@ -26,7 +26,7 @@
 
     <main id="messages">
       <section id="welcome">
-        <canvas id="hero" width="16" height="16" aria-hidden="true"></canvas>
+        <span class="sparky" id="hero-wrap"><canvas id="hero" width="16" height="16" aria-hidden="true"></canvas></span>
         <h1>What are we building<span id="where"></span>?</h1>
         <p class="hint">Ask in plain words. Gemini sharpens your prompt first; Enter again sends it.</p>
         <div class="chips">
@@ -47,25 +47,39 @@
       ></textarea>
       <div class="composer-bar">
         <button type="button" id="cook-toggle" class="pill" title="Rewrite prompts with Gemini before sending">⚡ Cook</button>
-        <select id="model-pick" title="Who answers: a Claude model, or Gemini for quick answers">
-          <option value="default">Claude (default model)</option>
-          <option value="opus">Claude Opus</option>
-          <option value="sonnet">Claude Sonnet</option>
-          <option value="haiku">Claude Haiku</option>
-          <option value="gemini">⚡ Gemini · quick answers</option>
-        </select>
-        <select id="effort-pick" title="How hard Claude thinks">
-          <option value="default">effort: default</option>
-          <option value="low">effort: low</option>
-          <option value="medium">effort: medium</option>
-          <option value="high">effort: high</option>
-          <option value="xhigh">effort: xhigh</option>
-          <option value="max">effort: max</option>
-        </select>
+        <button type="button" id="engine" class="engine" popovertarget="engine-panel" title="Who answers, and how hard it thinks">
+          <canvas id="engine-hat" width="6" height="4" aria-hidden="true"></canvas>
+          <span id="engine-name" class="engine-name"></span>
+          <span id="engine-meter" class="meter5" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span id="engine-effort" class="engine-effort"></span>
+        </button>
         <span id="note"></span>
         <span class="spacer"></span>
         <button type="button" id="stop" class="stop" title="Stop" hidden>■</button>
         <button type="submit" id="send" class="send" title="Send">↑</button>
+      </div>
+      <div id="engine-panel" popover role="dialog" aria-label="Model and effort">
+        <div class="core-head">
+          <span class="sparky core-sparky"><canvas id="preview" width="16" height="16" aria-hidden="true"></canvas></span>
+          <div class="core-titles">
+            <div class="core-title">POWER CORE</div>
+            <div id="core-line" class="core-line"></div>
+          </div>
+          <div class="core-keys">←→ effort · Enter picks · Esc closes</div>
+        </div>
+        <div class="core-label">Who answers</div>
+        <div id="models" class="models" role="radiogroup" aria-label="Model"></div>
+        <div id="effort-box" class="effort-box">
+          <div class="core-label">
+            How hard it thinks <span id="effort-name" class="effort-name"></span>
+            <button type="button" id="effort-auto" class="effort-auto" title="Let Claude Code choose">auto</button>
+          </div>
+          <div id="effort" class="effort" role="slider" tabindex="0" aria-label="Effort" aria-valuemin="1" aria-valuemax="5"></div>
+          <div id="effort-ticks" class="effort-ticks"></div>
+          <p id="effort-blurb" class="effort-blurb"></p>
+        </div>
+        <p id="gemini-note" class="core-note" hidden>Gemini quick answers have no effort level: they come back fast, without tools or files.</p>
+        <p id="core-lock" class="core-note lock" hidden>Sparky is mid-turn. Switch when he’s done, or press ■ to stop him.</p>
       </div>
     </form>
 

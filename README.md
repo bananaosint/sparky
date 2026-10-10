@@ -27,13 +27,13 @@ It installs Claude Code too if it's missing, downloads the latest Spark installe
 
 ## The app
 
-- **Its own look:** pixel-art Sparky assembles on the welcome screen, his eyes flicker on and glow, and he blinks and glances around while you work. Ultraviolet or teal gradient themes (◐ in the header), glass panels, glowing composer.
+- **Its own look:** pixel-art Sparky assembles on the welcome screen and stays alive: his eyes follow your mouse and watch you type, he works with crackling antennas while Claude runs, cheers when a turn lands, goes ×_× and smokes when one fails, jumps at permission questions, swirls while Gemini cooks, dozes off with floating z’s when left alone, and giggles when you click him (five quick clicks overloads him). He wears the hat of the model answering: a crown for Opus, a beret for Sonnet, a blossom for Haiku, a star for Gemini. Ultraviolet or teal gradient themes (◐ in the header), glass panels, glowing composer.
 - **Chat, not a terminal:** Claude's answers stream in as formatted text; every tool call is a card (shell commands, edits as diffs, file writes, searches, to-do lists) you can open for details and output.
 - **You approve tools:** when Claude wants to run a command or change a file, a card asks: Allow, Always allow (that tool, this chat), or Deny. Settings can let file edits through without asking.
 - **Gemini cooks your prompt:** Enter sends your words to Gemini, which rewrites them clearly (with a suitably dramatic role); the rewrite lands in the box to edit, Enter again sends it, Esc restores yours, a leading `\` skips it. Add a Gemini API key in ⚙ settings ([free key](https://aistudio.google.com/apikey)); it's stored encrypted for your Windows account.
 - **Images:** Ctrl+V pastes a screenshot into the message, or drag an image in.
 - **Skills:** Gemini (flash-lite) picks which of your installed skills Claude should use; they show as chips above the box and ride along in a `Skills:` line.
-- **Models:** pick Claude Opus, Sonnet or Haiku and an effort level next to the box (or `/model sonnet`, `/effort high`), or **Gemini · quick answers** for fast replies that never touch your files or your Claude plan.
+- **Models:** the **Power Core** next to the box picks who answers: Auto, Claude Opus, Sonnet or Haiku, each a card with its own Sparky, or **Gemini · quick answers** for fast replies that never touch your files or your Claude plan. Drag the effort bar from low to max (arrow keys work; hovering previews how charged Sparky gets); `/model sonnet` and `/effort high` still work. Every switch charges Sparky up.
 - **Modes:** `/antislop` (also `/red-team`, `/grillme`) turns a Spark mode on for every message; its chip turns it off. Other `/commands` go straight to Claude Code.
 - **What it costs, and who pays:** after each turn: the API-rate price Claude Code reports, the model, tokens in and out, tool calls, and whether it counts toward your Claude plan (not billed per message) or is billed to an API key. Gemini answers say they run on your Gemini key's project.
 - **Header:** the folder you're in, the model answering, the effort level.

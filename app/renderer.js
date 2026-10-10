@@ -1,6 +1,7 @@
 /* global marked, DOMPurify, spark */
-import { parseCommand, withModes } from './lib/commands.js';
+import { parseCommand, withModes, MODELS, EFFORTS } from './lib/commands.js';
 import { costLine } from './lib/account.js';
+import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
 
 const $ = (id) => document.getElementById(id);
 function el(tag, cls, text) {
@@ -52,70 +53,110 @@ const remember = (entry) => (history = [...history, entry].slice(-12));
 
 // ---------- Sparky ----------
 
-const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
-const UNLIT = [30, 27, 58];
+// Each canvas showing Sparky is an actor: it loops a base move (idle, work, sleep…) and
+// plays one-shot moves (cheer, oops…) over it. One animation frame paints them all.
+const still = matchMedia('(prefers-reduced-motion: reduce)');
+const actors = new Set();
+// The hat for the model answering, and the point on screen his eyes follow.
+let hat;
+let gaze = null;
+const GLYPHS = { z: 'z', heart: '♥', bang: '!', star: '✦' };
 
-// Eyes at brightness g: unlit, through the theme's glow color, to a white-hot core.
-function drawSparky(canvas, { g = 1, blink = false, lookLeft = false, pixels = look.sprite } = {}) {
-  const paint = canvas.getContext('2d');
-  paint.clearRect(0, 0, 16, 16);
-  const white = g > 0.8 ? mix(look.glow, [255, 255, 255], (g - 0.8) * 5) : mix(UNLIT, look.glow, g / 0.8);
-  pixels.forEach((row, y) =>
-    row.forEach((color, x) => {
-      if (!color) return;
-      let c = color;
-      const eye = (y === 7 || y === 8) && [4, 5, 10, 11].includes(x);
-      if (eye && blink) c = look.sprite[6]?.[x] ?? color;
-      else if (eye) {
-        const pupil = y === 8 && (lookLeft ? x === 4 || x === 10 : x === 5 || x === 11);
-        c = pupil ? [11, 10, 31] : white;
-      }
-      paint.fillStyle = `rgb(${c.join(',')})`;
-      paint.fillRect(x, y, 1, 1);
-    }),
-  );
+function actor(canvas, base = 'idle', opts = {}) {
+  const a = { canvas, base, name: base, start: performance.now(), last: 0, opts, once: {} };
+  actors.add(a);
+  return a;
 }
 
-// Pixels fly in from fixed scattered spots, then the eyes catch like a neon tube.
-function assemble(canvas) {
-  const targets = [];
-  look.sprite.forEach((row, y) => row.forEach((c, x) => c && targets.push([x, y, c])));
-  const start = targets.map((_, i) => {
-    const n = Math.sin(i * 12.9898) * 43758.5453;
-    const m = Math.sin(i * 78.233) * 12345.6789;
-    return [Math.floor((n - Math.floor(n)) * 16), Math.floor((m - Math.floor(m)) * 16)];
-  });
-  const t0 = performance.now();
-  const flicker = [0.15, 0.6, 0.1, 0.85, 0.35, 1];
-  function frame(now) {
-    const t = Math.min(1, (now - t0) / 650);
-    const pixels = Array.from({ length: 16 }, () => Array(16).fill(null));
-    targets.forEach(([x, y, c], i) => {
-      const p = 1 - (1 - Math.min(1, Math.max(0, (t - (i % 7) / 20) / 0.7))) ** 3;
-      const [sx, sy] = start[i];
-      pixels[Math.round(sy + (y - sy) * p)][Math.round(sx + (x - sx) * p)] = c;
-    });
-    if (t < 1) {
-      drawSparky(canvas, { g: 0, pixels });
-      requestAnimationFrame(frame);
-      return;
+function play(a, name, once = {}) {
+  Object.assign(a, { name, start: performance.now(), last: 0, once });
+}
+
+// A new base takes over at once, unless a one-shot move is still playing.
+function setBase(a, name) {
+  a.base = name;
+  if (MOVES[a.name].loop && a.name !== name) play(a, name);
+}
+
+function pupils(canvas) {
+  if (!gaze) return undefined;
+  const r = canvas.getBoundingClientRect();
+  return { x: gaze.x < r.left + r.width / 2 ? 0 : 1, y: gaze.y < r.top + r.height * 0.45 ? 0 : 1 };
+}
+
+function paint(canvas, pixels) {
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(16, 16);
+  pixels.forEach((row, y) => row.forEach((c, x) => c && image.data.set([...c, 255], (y * 16 + x) * 4)));
+  g.putImageData(image, 0, 0);
+}
+
+function spawn(canvas, p) {
+  const node = el('span', `particle ${p.kind}`, GLYPHS[p.kind]);
+  node.style.cssText = `--px:${canvas.clientWidth / 16}px;--x:${p.x};--y:${p.y};--dx:${p.dx};--dy:${p.dy};--life:${p.life}ms`;
+  node.addEventListener('animationend', () => node.remove());
+  canvas.parentElement.append(node);
+}
+
+function tick(now) {
+  for (const a of actors) {
+    if (!a.canvas.isConnected) actors.delete(a);
+    if (!a.canvas.offsetParent || !look.sprite.length) continue;
+    const t = now - a.start;
+    const o = { sprite: look.sprite, glow: look.glow, hat, look: pupils(a.canvas), ...a.opts, ...a.once };
+    const f = frameAt(a.name, t, o);
+    paint(a.canvas, f.pixels);
+    if (!still.matches) {
+      const { x, y, sx, sy } = f.move;
+      a.canvas.style.transform = `translate(${x * 6.25}%, ${y * 6.25}%) scale(${sx}, ${sy})`;
+      for (const p of emits(a.name, a.last, t, o)) spawn(a.canvas, p);
     }
-    flicker.forEach((g, i) => setTimeout(() => drawSparky(canvas, { g }), i * 70));
+    a.last = t;
+    if (f.done) play(a, a.base);
   }
-  requestAnimationFrame(frame);
+  requestAnimationFrame(tick);
 }
+requestAnimationFrame(tick);
 
-// Now and then Sparky blinks, and sometimes glances left.
+const mini = actor($('mini'));
+const hero = actor($('hero'));
+const both = (fn) => [mini, hero].forEach(fn);
+
+// Left alone for a while, he dozes off; any movement wakes him with a start.
+const SLEEP_AFTER = 90_000;
+let lastActive = performance.now();
+function wake() {
+  lastActive = performance.now();
+  if (mini.base !== 'sleep') return;
+  both((a) => {
+    setBase(a, 'idle');
+    play(a, 'alert');
+  });
+}
 setInterval(() => {
-  for (const canvas of [$('mini'), $('hero')]) {
-    drawSparky(canvas, { blink: true });
-    setTimeout(() => drawSparky(canvas), 140);
-  }
-  if (Math.random() < 0.35) {
-    setTimeout(() => [$('mini'), $('hero')].forEach((c) => drawSparky(c, { lookLeft: true })), 900);
-    setTimeout(() => [$('mini'), $('hero')].forEach((c) => drawSparky(c)), 1700);
-  }
-}, 5200);
+  if (!busy && mini.base === 'idle' && performance.now() - lastActive > SLEEP_AFTER) both((a) => setBase(a, 'sleep'));
+}, 5000);
+addEventListener('pointermove', (e) => {
+  gaze = { x: e.clientX, y: e.clientY };
+  wake();
+});
+// Typing, he watches the box.
+addEventListener('keydown', () => {
+  const r = $('composer').getBoundingClientRect();
+  gaze = { x: r.left + r.width / 2, y: r.bottom };
+  wake();
+});
+
+// Poke him and he giggles; five quick pokes and he overloads.
+let pokes = [];
+for (const a of [mini, hero])
+  a.canvas.parentElement.addEventListener('click', () => {
+    const now = performance.now();
+    pokes = [...pokes.filter((t) => now - t < 2000), now];
+    if (pokes.length < 5) return play(a, 'poke');
+    pokes = [];
+    play(a, 'charge', { level: 5 });
+  });
 
 // ---------- messages ----------
 
@@ -211,9 +252,12 @@ function setThinking(on) {
   }
   if (thinking) return;
   const node = el('div', 'thinking');
-  const dot = el('span', 'spark-dot', 'ϟ');
+  const pic = el('span', 'sparky');
+  const canvas = el('canvas');
+  canvas.width = canvas.height = 16;
+  pic.append(canvas);
   const label = el('span', 'label');
-  node.append(dot, label);
+  node.append(pic, label);
   const started = performance.now();
   let verb = VERBS[Math.floor(Math.random() * VERBS.length)];
   const tick = () => {
@@ -223,6 +267,7 @@ function setThinking(on) {
   };
   tick();
   thinking = { el: node, timer: setInterval(tick, 1000) };
+  actor(canvas, 'work');
   append(document.createDocumentFragment());
 }
 
@@ -231,6 +276,8 @@ function setBusy(on) {
   $('send').hidden = on;
   $('stop').hidden = !on;
   setThinking(on);
+  both((a) => setBase(a, on ? 'work' : 'idle'));
+  renderEngine();
 }
 
 function addUser(text, images) {
@@ -264,9 +311,8 @@ function renderStatus() {
   const effort = settings.model !== 'gemini' && settings.effort !== 'default' ? ` · ${settings.effort} effort` : '';
   $('status').textContent = `${where} · ${answering}${effort} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
   $('status').title = cwd;
-  $('model-pick').value = settings.model;
-  $('effort-pick').value = settings.effort;
-  $('effort-pick').hidden = settings.model === 'gemini';
+  hat = settings.model in HATS ? settings.model : undefined;
+  renderEngine();
 }
 
 // Above the prompt: active modes (click to turn off) and the skills Gemini picked.
@@ -329,6 +375,7 @@ spark.on('event', (event) => {
   if (event.kind === 'result') {
     streaming = null;
     setBusy(false);
+    both((a) => play(a, event.ok ? 'cheer' : 'oops'));
     const seconds = (event.durationMs / 1000).toFixed(1);
     const line = el(
       'div',
@@ -357,12 +404,14 @@ spark.on('permission', ({ id, tool, input }) => {
   no.addEventListener('click', () => answer(false, false));
   row.append(yes, always, no);
   card.append(row);
+  both((a) => play(a, 'alert'));
   append(card);
   yes.focus();
 });
 
 spark.on('exit', ({ code, error }) => {
   setBusy(false);
+  both((a) => play(a, 'oops'));
   streaming = null;
   const card = el('div', 'result failed');
   const signIn = /log ?in|auth|credential/i.test(error ?? '') ? ' If you have not signed in yet, run claude once in a terminal.' : '';
@@ -385,8 +434,7 @@ spark.on('session', (s) => {
     $('welcome').hidden = false;
     tools.clear();
     history = [];
-    assemble($('hero'));
-    assemble($('mini'));
+    both((a) => play(a, 'assemble'));
   }
 });
 
@@ -474,8 +522,10 @@ async function askGemini(text) {
 }
 
 async function setSetting(changes) {
+  const before = settings;
   settings = await spark.setSettings(changes);
   renderStatus();
+  if (before.model !== settings.model || before.effort !== settings.effort) powerUp();
 }
 
 // Spark's own slash commands act here; any other /command goes to Claude Code as typed.
@@ -509,9 +559,14 @@ async function submit() {
     const cook = (settings.cook || settings.pickSkills) && settings.hasKey && cookedFrom === null && text.split(/\s+/).length >= 4;
     if (cook) {
       composer.classList.add('cooking');
+      both((a) => setBase(a, 'cook'));
       note(settings.cook ? 'cooking with Gemini…' : 'picking skills with Gemini…');
       const result = await spark.cook(text);
       composer.classList.remove('cooking');
+      both((a) => {
+        setBase(a, 'idle');
+        play(a, result.error ? 'oops' : 'poke');
+      });
       cookedFrom = text;
       if (result.error) return note(`not cooked (${result.error}) · Enter sends yours as typed`);
       input.value = result.text;
@@ -570,28 +625,13 @@ $('folder').addEventListener('click', () => spark.openFolder());
 $('theme').addEventListener('click', async () => {
   look = { ...look, ...(await spark.toggleTheme()) };
   document.body.className = look.theme;
-  drawSparky($('mini'));
-  drawSparky($('hero'));
+  both((a) => play(a, 'charge'));
 });
 $('cook-toggle').addEventListener('click', async () => {
   if (!settings.hasKey) return $('gear').click();
   await setSetting({ cook: !settings.cook });
   $('cook-toggle').classList.toggle('on', settings.cook);
   note(settings.cook ? 'Gemini rewrites your prompts' : 'Gemini rewriting off: prompts go as typed');
-});
-$('model-pick').addEventListener('change', (e) => {
-  if (busy) {
-    e.target.value = settings.model;
-    return note('wait for Claude to finish before switching models');
-  }
-  setSetting({ model: e.target.value });
-});
-$('effort-pick').addEventListener('change', (e) => {
-  if (busy) {
-    e.target.value = settings.effort;
-    return note('wait for Claude to finish before changing effort');
-  }
-  setSetting({ effort: e.target.value });
 });
 for (const chip of document.querySelectorAll('.chip'))
   chip.addEventListener('click', () => {
@@ -605,6 +645,183 @@ list.addEventListener('click', (e) => {
   e.preventDefault();
   spark.openExternal(a.href);
 });
+
+// ---------- power core: model and effort ----------
+
+const MODEL_INFO = {
+  default: { name: 'Auto', tag: 'your plan’s pick', blurb: 'Claude Code’s default model for your plan.', depth: 0, speed: 0 },
+  opus: { name: 'Opus', tag: 'deepest thinker', blurb: 'Hard bugs, big refactors, careful plans.', depth: 5, speed: 2 },
+  sonnet: { name: 'Sonnet', tag: 'everyday builder', blurb: 'Fast and sharp for most coding work.', depth: 4, speed: 4 },
+  haiku: { name: 'Haiku', tag: 'fastest Claude', blurb: 'Quick edits and small questions.', depth: 2, speed: 5 },
+  gemini: { name: 'Gemini', tag: 'quick answers', blurb: 'Answers in this window, without tools or files, on your Gemini key.', depth: 2, speed: 5 },
+};
+const EFFORT_BLURB = {
+  default: 'Claude Code decides how hard to think.',
+  low: 'Light and quick: few thinking tokens.',
+  medium: 'Balanced: thinks when it helps.',
+  high: 'Thinks it through before acting.',
+  xhigh: 'Thinks longer and checks its work.',
+  max: 'Everything it has. Slowest, most tokens.',
+};
+const levelOf = (effort) => EFFORTS.indexOf(effort) + 1;
+const panel = $('engine-panel');
+const track = $('effort');
+const preview = actor($('preview'), 'power');
+
+function pips(label, n) {
+  const row = el('span', 'stat');
+  row.append(el('span', 'stat-label', label));
+  for (let i = 1; i <= 5; i++) row.append(el('i', i <= n ? 'on' : ''));
+  return row;
+}
+
+// A card per model, each with its own Sparky wearing that model's hat.
+const cards = MODELS.map((model) => {
+  const info = MODEL_INFO[model];
+  const card = el('button', `card tone-${model}`);
+  card.type = 'button';
+  card.setAttribute('role', 'radio');
+  card.dataset.model = model;
+  card.title = info.blurb;
+  const pic = el('span', 'sparky');
+  const canvas = el('canvas');
+  canvas.width = canvas.height = 16;
+  pic.append(canvas);
+  card.append(pic, el('span', 'card-name', info.name), el('span', 'card-tag', info.tag));
+  if (info.depth) card.append(pips('depth', info.depth), pips('speed', info.speed));
+  card.actor = actor(canvas, 'idle', { hat: model in HATS ? model : null });
+  card.addEventListener('pointerenter', () => play(card.actor, 'alert'));
+  // The shine follows the pointer across the card.
+  card.addEventListener('pointermove', (e) => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', `${e.clientX - r.left}px`);
+    card.style.setProperty('--my', `${e.clientY - r.top}px`);
+  });
+  card.addEventListener('click', () => pick({ model }));
+  return card;
+});
+$('models').append(...cards);
+
+const segs = EFFORTS.map((_, i) => {
+  const seg = el('span', 'seg');
+  seg.style.setProperty('--i', i);
+  return seg;
+});
+track.append(...segs);
+$('effort-ticks').append(...EFFORTS.map((e) => el('span', '', e)));
+
+// The effort shown on the track and on the preview Sparky: committed, dragged or hovered.
+function showEffort(level) {
+  const effort = EFFORTS[level - 1] ?? 'default';
+  segs.forEach((seg, i) => seg.classList.toggle('on', i < level));
+  [...$('effort-ticks').children].forEach((tick, i) => tick.classList.toggle('on', i === level - 1));
+  track.classList.toggle('max', level === 5);
+  track.setAttribute('aria-valuenow', level);
+  track.setAttribute('aria-valuetext', effort);
+  $('effort-name').textContent = level ? effort : 'auto';
+  $('effort-blurb').textContent = EFFORT_BLURB[effort];
+  preview.opts.level = level;
+}
+
+function drawHat() {
+  const canvas = $('engine-hat');
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, 6, 4);
+  for (const [x, y, c] of HATS[settings.model] ?? []) {
+    g.fillStyle = `rgb(${c.join(',')})`;
+    g.fillRect(x - 5, y, 1, 1);
+  }
+  canvas.hidden = !(settings.model in HATS);
+}
+
+function renderEngine() {
+  const { model, effort } = settings;
+  if (!model) return;
+  const info = MODEL_INFO[model];
+  const gemini = model === 'gemini';
+  const level = levelOf(effort);
+  $('engine').className = `engine tone-${model}`;
+  $('engine-name').textContent = info.name;
+  $('engine-effort').textContent = gemini ? 'quick' : level ? effort : 'auto';
+  $('engine-meter').hidden = gemini;
+  $('engine-meter').classList.toggle('max', level === 5);
+  [...$('engine-meter').children].forEach((pip, i) => pip.classList.toggle('on', i < level));
+  drawHat();
+  $('core-line').textContent = gemini ? info.blurb : `${info.name} at ${level ? effort : 'auto'} effort. ${info.blurb}`;
+  for (const card of cards) {
+    const on = card.dataset.model === model;
+    card.classList.toggle('on', on);
+    card.setAttribute('aria-checked', on);
+    card.tabIndex = on ? 0 : -1;
+  }
+  panel.className = `tone-${model}${busy ? ' locked' : ''}`;
+  $('core-lock').hidden = !busy;
+  $('effort-box').classList.toggle('off', gemini);
+  $('gemini-note').hidden = !gemini;
+  $('effort-auto').classList.toggle('on', !level);
+  track.tabIndex = gemini ? -1 : 0;
+  showEffort(level);
+}
+
+// Every switch charges Sparky up; the chosen card's Sparky jumps for joy.
+function powerUp() {
+  const level = levelOf(settings.effort);
+  for (const a of [mini, hero, preview]) play(a, 'charge', { level });
+  const card = cards.find((c) => c.dataset.model === settings.model);
+  if (card) play(card.actor, 'cheer');
+}
+
+function pick(changes) {
+  if (busy) return note('wait for Sparky to finish before switching');
+  return setSetting(changes);
+}
+
+panel.addEventListener('toggle', (e) => {
+  if (e.newState !== 'open') return;
+  renderEngine();
+  play(preview, 'alert');
+  (cards.find((c) => c.classList.contains('on')) ?? cards[0]).focus();
+});
+
+$('models').addEventListener('keydown', (e) => {
+  const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  cards[(cards.indexOf(document.activeElement) + step + cards.length) % cards.length].focus();
+});
+
+// Drag or click along the track; hovering previews a level, letting go picks it.
+const levelAt = (e) => {
+  const r = track.getBoundingClientRect();
+  return Math.min(5, Math.max(1, Math.ceil(((e.clientX - r.left) / r.width) * 5)));
+};
+let dragging = false;
+track.addEventListener('pointerdown', (e) => {
+  if (busy) return;
+  dragging = true;
+  track.setPointerCapture(e.pointerId);
+  showEffort(levelAt(e));
+});
+track.addEventListener('pointermove', (e) => showEffort(levelAt(e)));
+track.addEventListener('pointerleave', () => !dragging && showEffort(levelOf(settings.effort)));
+track.addEventListener('pointerup', async (e) => {
+  if (!dragging) return;
+  await pick({ effort: EFFORTS[levelAt(e) - 1] });
+  dragging = false;
+});
+// Arrow keys step the level; it's picked once the keys go quiet, so one restart, not five.
+let settle;
+track.addEventListener('keydown', (e) => {
+  const now = Number(track.getAttribute('aria-valuenow'));
+  const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+  const level = e.key === 'Home' ? 1 : e.key === 'End' ? 5 : step ? Math.min(5, Math.max(1, now + step)) : 0;
+  if (!level || busy) return;
+  e.preventDefault();
+  showEffort(level);
+  clearTimeout(settle);
+  settle = setTimeout(() => pick({ effort: EFFORTS[level - 1] }), 450);
+});
+$('effort-auto').addEventListener('click', () => pick({ effort: 'default' }));
 
 // ---------- settings ----------
 
