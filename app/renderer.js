@@ -1,4 +1,7 @@
 /* global marked, DOMPurify, spark */
+import { parseCommand, withModes } from './lib/commands.js';
+import { costLine } from './lib/account.js';
+
 const $ = (id) => document.getElementById(id);
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -35,6 +38,17 @@ let cookedFrom = null;
 let streaming = null;
 const tools = new Map();
 let thinking = null;
+// Spark modes (/antislop and friends) that ride along with each message.
+let modes = [];
+// Who pays for Claude's turns, from the sign-in Claude Code reports.
+let who = { label: 'Claude', billed: false, note: 'priced at API rates' };
+let model = '';
+let turnTools = 0;
+// Skills Gemini picked for the prompt in the box, and which model picked them.
+let picked = { skills: [], model: '' };
+// The recent chat, for Gemini's quick answers.
+let history = [];
+const remember = (entry) => (history = [...history, entry].slice(-12));
 
 // ---------- Sparky ----------
 
@@ -243,9 +257,46 @@ function assistant() {
   return streaming;
 }
 
+// The header: the folder, then who answers and how hard it thinks, then Gemini's state.
+function renderStatus() {
+  const where = cwd.replace(/^[A-Za-z]:\\Users\\[^\\]+/, '~');
+  const answering = settings.model === 'gemini' ? 'Gemini quick answers' : model || 'Claude';
+  const effort = settings.model !== 'gemini' && settings.effort !== 'default' ? ` · ${settings.effort} effort` : '';
+  $('status').textContent = `${where} · ${answering}${effort} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
+  $('status').title = cwd;
+  $('model-pick').value = settings.model;
+  $('effort-pick').value = settings.effort;
+  $('effort-pick').hidden = settings.model === 'gemini';
+}
+
+// Above the prompt: active modes (click to turn off) and the skills Gemini picked.
+function renderChips() {
+  const row = $('chips');
+  const items = modes.map((m) => {
+    const chip = el('button', 'mode-chip', `${m} ✕`);
+    chip.type = 'button';
+    chip.title = `Turn ${m} off`;
+    chip.addEventListener('click', () => {
+      modes = modes.filter((x) => x !== m);
+      renderChips();
+    });
+    return chip;
+  });
+  if (picked.skills.length) {
+    items.push(el('span', 'chips-label', `skills · ${picked.model}`));
+    for (const s of picked.skills) items.push(el('span', 'skill-chip', s));
+  }
+  row.replaceChildren(...items);
+}
+
+spark.on('payer', (p) => (who = p));
+
 let renderQueued = false;
 spark.on('event', (event) => {
-  if (event.kind === 'init') $('model').textContent = event.model ?? '';
+  if (event.kind === 'init') {
+    model = event.model ?? '';
+    renderStatus();
+  }
   if (event.kind === 'delta') {
     const s = assistant();
     s.text += event.text;
@@ -261,9 +312,11 @@ spark.on('event', (event) => {
   if (event.kind === 'text') {
     assistant().el.innerHTML = markdown(event.text);
     streaming = null;
+    remember({ role: 'assistant', text: event.text });
   }
   if (event.kind === 'tool') {
     streaming = null;
+    turnTools++;
     toolCard(event.id, event.name, event.input);
   }
   if (event.kind === 'tool-result') {
@@ -277,7 +330,13 @@ spark.on('event', (event) => {
     streaming = null;
     setBusy(false);
     const seconds = (event.durationMs / 1000).toFixed(1);
-    append(el('div', event.ok ? 'result' : 'result failed', event.ok ? `✦ done in ${seconds}s · $${event.costUsd.toFixed(4)}` : `✗ ${event.text || 'the turn ended with an error'}`));
+    const line = el(
+      'div',
+      event.ok ? 'result' : 'result failed',
+      event.ok ? `✦ done in ${seconds}s · ${costLine({ ...event, model, tools: turnTools }, who)}` : `✗ ${event.text || 'the turn ended with an error'}`,
+    );
+    line.title = `The price Claude Code reports for this turn at API rates: the model, the tokens it read and wrote, and its tool calls. ${who.label}: ${who.note}. Gemini rewrites and skill picks use your Gemini key's Google project.`;
+    append(line);
   }
 });
 
@@ -316,9 +375,7 @@ spark.on('session', (s) => {
   cwd = s.cwd;
   settings = s.settings;
   document.body.className = s.theme;
-  $('status').innerHTML = '';
-  $('status').append(el('span', '', s.folder), el('span', 'sep', ' · '), el('span', '', s.state), el('span', 'sep', ' · '), el('span', '', ''));
-  $('status').lastChild.id = 'model';
+  renderStatus();
   $('folder').textContent = s.folder;
   $('where').textContent = ` in ${s.folder}`;
   $('cook-toggle').classList.toggle('on', settings.cook && settings.hasKey);
@@ -327,6 +384,7 @@ spark.on('session', (s) => {
     list.replaceChildren($('welcome'));
     $('welcome').hidden = false;
     tools.clear();
+    history = [];
     assemble($('hero'));
     assemble($('mini'));
   }
@@ -375,37 +433,97 @@ async function addImage(file) {
   renderAttachments();
 }
 
-function sendNow(text) {
-  addUser(text, attachments);
-  spark.sendMessage({ text, images: attachments.map(({ mediaType, data }) => ({ mediaType, data })) });
+function clearBox() {
   input.value = '';
   autosize();
   attachments = [];
   renderAttachments();
   cookedFrom = null;
+  picked = { skills: [], model: '' };
+  renderChips();
   composer.classList.remove('cooked');
   note('');
+}
+
+function sendNow(text) {
+  const images = attachments.map(({ mediaType, data }) => ({ mediaType, data }));
+  addUser(text, attachments);
+  remember({ role: 'user', text, images });
+  spark.sendMessage({ text: withModes(text, modes), images });
+  clearBox();
+  turnTools = 0;
   setBusy(true);
 }
 
-// Enter cooks the prompt with Gemini first (when on); Enter again sends what the box holds.
+// Gemini answers in the window: quick, no tools, no files.
+async function askGemini(text) {
+  const images = attachments.map(({ mediaType, data }) => ({ mediaType, data }));
+  addUser(text, attachments);
+  remember({ role: 'user', text, images });
+  clearBox();
+  setBusy(true);
+  const answer = await spark.quick(history);
+  setBusy(false);
+  if (answer.error) return append(el('div', 'result failed', `✗ Gemini: ${answer.error}`));
+  const bubble = el('div', 'msg assistant gemini');
+  bubble.innerHTML = markdown(answer.text);
+  bubble.prepend(el('div', 'badge', `⚡ ${answer.model}`));
+  append(bubble);
+  remember({ role: 'assistant', text: answer.text });
+  append(el('div', 'result', `✦ quick answer by ${answer.model} · on your Gemini key's Google project (free tier or its billing), not your Claude plan`));
+}
+
+async function setSetting(changes) {
+  settings = await spark.setSettings(changes);
+  renderStatus();
+}
+
+// Spark's own slash commands act here; any other /command goes to Claude Code as typed.
+function runCommand(text) {
+  const command = parseCommand(text);
+  if (!command || command.kind === 'passthrough') return false;
+  if (command.kind === 'mode') {
+    modes = modes.includes(command.mode) ? modes.filter((m) => m !== command.mode) : [...modes, command.mode];
+    note(`${command.mode} ${modes.includes(command.mode) ? 'on' : 'off'}`);
+  }
+  if (command.kind === 'model') setSetting({ model: command.model });
+  if (command.kind === 'effort') setSetting({ effort: command.effort });
+  input.value = '';
+  autosize();
+  renderChips();
+  return true;
+}
+
+// Enter cooks the prompt with Gemini first (rewrite and skill picks, as set); Enter again
+// sends what the box holds. A leading \ sends as typed.
 async function submit() {
   if (busy) return note('Sparky is still working: wait, or press ■ to stop.');
   let text = input.value.trim();
   if (!text && !attachments.length) return;
-  if (text.startsWith('\\')) return sendNow(text.slice(1).trimStart());
-  const cook = settings.cook && settings.hasKey && cookedFrom === null && text.split(/\s+/).length >= 4;
-  if (!cook) return sendNow(text);
-  composer.classList.add('cooking');
-  note('cooking with Gemini…');
-  const result = await spark.cook(text);
-  composer.classList.remove('cooking');
-  cookedFrom = text;
-  if (result.error) return note(`not cooked (${result.error}) · Enter sends yours as typed`);
-  input.value = result.text;
-  autosize();
-  composer.classList.add('cooked');
-  note(`cooked by ${result.model} · edit freely · Enter sends · Esc restores yours`);
+  if (text.startsWith('/')) {
+    if (runCommand(text)) return;
+    return settings.model === 'gemini' ? note('slash commands go to Claude: pick a Claude model first') : sendNow(text);
+  }
+  if (text.startsWith('\\')) text = text.slice(1).trimStart();
+  else if (settings.model !== 'gemini') {
+    const cook = (settings.cook || settings.pickSkills) && settings.hasKey && cookedFrom === null && text.split(/\s+/).length >= 4;
+    if (cook) {
+      composer.classList.add('cooking');
+      note(settings.cook ? 'cooking with Gemini…' : 'picking skills with Gemini…');
+      const result = await spark.cook(text);
+      composer.classList.remove('cooking');
+      cookedFrom = text;
+      if (result.error) return note(`not cooked (${result.error}) · Enter sends yours as typed`);
+      input.value = result.text;
+      autosize();
+      picked = { skills: result.skills ?? [], model: result.skillsModel ?? '' };
+      renderChips();
+      composer.classList.add('cooked');
+      const by = [result.model && `rewritten by ${result.model}`, result.rewriteError && `not rewritten (${result.rewriteError})`, !picked.skills.length && result.skillsModel && 'no skills needed'].filter(Boolean);
+      return note(`${by.join(' · ')}${by.length ? ' · ' : ''}edit freely · Enter sends · Esc restores yours`);
+    }
+  }
+  return settings.model === 'gemini' ? askGemini(text) : sendNow(text);
 }
 
 composer.addEventListener('submit', (e) => {
@@ -420,6 +538,8 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && cookedFrom !== null) {
     input.value = cookedFrom;
     cookedFrom = null;
+    picked = { skills: [], model: '' };
+    renderChips();
     composer.classList.remove('cooked');
     note('');
     autosize();
@@ -455,8 +575,23 @@ $('theme').addEventListener('click', async () => {
 });
 $('cook-toggle').addEventListener('click', async () => {
   if (!settings.hasKey) return $('gear').click();
-  settings = await spark.setSettings({ cook: !settings.cook });
+  await setSetting({ cook: !settings.cook });
   $('cook-toggle').classList.toggle('on', settings.cook);
+  note(settings.cook ? 'Gemini rewrites your prompts' : 'Gemini rewriting off: prompts go as typed');
+});
+$('model-pick').addEventListener('change', (e) => {
+  if (busy) {
+    e.target.value = settings.model;
+    return note('wait for Claude to finish before switching models');
+  }
+  setSetting({ model: e.target.value });
+});
+$('effort-pick').addEventListener('change', (e) => {
+  if (busy) {
+    e.target.value = settings.effort;
+    return note('wait for Claude to finish before changing effort');
+  }
+  setSetting({ effort: e.target.value });
 });
 for (const chip of document.querySelectorAll('.chip'))
   chip.addEventListener('click', () => {
@@ -475,6 +610,7 @@ list.addEventListener('click', (e) => {
 
 $('gear').addEventListener('click', () => {
   $('cook').checked = settings.cook;
+  $('pick-skills').checked = settings.pickSkills;
   $('auto-edits').checked = settings.autoEdits;
   $('key').value = '';
   $('key-state').textContent = settings.hasKey ? 'A key is saved (encrypted for your Windows account). Paste a new one to replace it.' : 'No key yet: without one, prompts are sent as typed.';
@@ -482,7 +618,7 @@ $('gear').addEventListener('click', () => {
 });
 $('save-settings').addEventListener('click', async () => {
   const key = $('key').value.trim();
-  settings = await spark.setSettings({ cook: $('cook').checked, autoEdits: $('auto-edits').checked, ...(key ? { key } : {}) });
+  await setSetting({ cook: $('cook').checked, pickSkills: $('pick-skills').checked, autoEdits: $('auto-edits').checked, ...(key ? { key } : {}) });
   $('cook-toggle').classList.toggle('on', settings.cook && settings.hasKey);
   $('settings').close();
 });

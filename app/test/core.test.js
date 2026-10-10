@@ -5,7 +5,7 @@ import { handleMcp } from '../bridge/mcp.js';
 import { cookPrompt } from '../lib/cook.js';
 
 test('stream-json lines become window events', () => {
-  assert.deepEqual(parseLine('{"type":"system","subtype":"init","session_id":"s1","model":"m"}'), [{ kind: 'init', sessionId: 's1', model: 'm' }]);
+  assert.deepEqual(parseLine('{"type":"system","subtype":"init","session_id":"s1","model":"m"}'), [{ kind: 'init', sessionId: 's1', model: 'm', skills: [], apiKeySource: undefined }]);
   assert.deepEqual(
     parseLine('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}}'),
     [{ kind: 'delta', text: 'hi' }],
@@ -19,7 +19,7 @@ test('stream-json lines become window events', () => {
     [{ kind: 'tool-result', id: 't1', output: 'ok', isError: true }],
   );
   assert.deepEqual(parseLine('{"type":"result","subtype":"success","result":"hi","total_cost_usd":0.01,"duration_ms":900}'), [
-    { kind: 'result', ok: true, text: 'hi', costUsd: 0.01, durationMs: 900 },
+    { kind: 'result', ok: true, text: 'hi', costUsd: 0.01, durationMs: 900, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
   ]);
   assert.deepEqual(parseLine('{"type":"rate_limit_event"}'), []);
   assert.deepEqual(parseLine('not json'), []);
@@ -58,11 +58,12 @@ test('cooking rewrites through the model chain, retrying a failing model before 
     asked.push(model);
     return model === 'slow' ? { ok: false, status: 503 } : answer({ prompt: 'Add a dark mode toggle.', unclear: [], role: 'a lighting wizard' });
   };
-  const out = await cookPrompt('add dark mode', { key: 'k', models: ['slow', 'fast'], fetchImpl });
+  const out = await cookPrompt('add dark mode', { key: 'k', rewriteModels: ['slow', 'fast'], pickSkills: false, fetchImpl });
   assert.deepEqual(asked, ['slow', 'slow', 'slow', 'fast']);
-  assert.deepEqual(out, { text: 'Act as a lighting wizard.\n\nAdd a dark mode toggle.', model: 'fast' });
+  assert.equal(out.text, 'Act as a lighting wizard.\n\nAdd a dark mode toggle.');
+  assert.equal(out.model, 'fast');
 });
 
 test('a refused key stops cooking at once', async () => {
-  await assert.rejects(cookPrompt('add dark mode', { key: 'bad', models: ['a', 'b'], fetchImpl: async () => ({ ok: false, status: 403 }) }), /refused the key/);
+  await assert.rejects(cookPrompt('add dark mode', { key: 'bad', rewriteModels: ['a', 'b'], pickSkills: false, fetchImpl: async () => ({ ok: false, status: 403 }) }), /refused the key/);
 });

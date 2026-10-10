@@ -12,7 +12,10 @@ import { loadConfig, saveConfig } from './staged/src/config.js';
 import { loadKey, saveKey, clearKey } from './staged/src/key.js';
 import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
-import { cookPrompt } from './lib/cook.js';
+import { cookPrompt, quickAnswer } from './lib/cook.js';
+import { describeSkills, listSkills } from './lib/skills.js';
+import { payer } from './lib/account.js';
+import { homedir } from 'node:os';
 import { isTrusted, trust, sessionGuard } from './lib/trust.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +23,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const resources = app.isPackaged ? process.resourcesPath : join(here, 'staged');
 const bridgeDir = app.isPackaged ? join(process.resourcesPath, 'bridge') : join(here, 'bridge');
 const pluginDir = join(resources, 'plugin');
-const REWRITE_MODELS = JSON.parse(readFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8')).userConfig.rewrite_models.default.split(',');
+const { userConfig } = JSON.parse(readFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8'));
+const REWRITE_MODELS = userConfig.rewrite_models.default.split(',');
+const ROUTE_MODELS = userConfig.route_models.default.split(',');
+// The Claude models the picker offers, as Claude Code's --model aliases; 'gemini' answers in the window.
+const CLAUDE_MODELS = new Set(['opus', 'sonnet', 'haiku']);
 // Tools that only change files: "auto-accept edits" lets these run without asking.
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
@@ -33,6 +40,8 @@ let sessionId;
 let bridge;
 let geminiKey;
 let alwaysAllow = new Set();
+// The session's skills with what each is for, for Gemini's skill picks.
+let skillInfo = [];
 // Permission questions waiting on the window, by id.
 const pending = new Map();
 
@@ -43,7 +52,25 @@ const look = (theme) => ({ theme, sprite: grid(theme), glow: THEMES[theme].glow 
 
 function settings() {
   const c = loadConfig();
-  return { theme: configuredTheme(c), cook: c.cook !== false, autoEdits: c.autoEdits === true, hasKey: Boolean(geminiKey) };
+  return {
+    theme: configuredTheme(c),
+    cook: c.cook !== false,
+    pickSkills: c.pickSkills !== false,
+    autoEdits: c.autoEdits === true,
+    model: c.model ?? 'default',
+    effort: c.effort ?? 'default',
+    hasKey: Boolean(geminiKey),
+  };
+}
+
+// Only the sign-in fields that say which plan pays; nothing personal leaves this function.
+function account() {
+  try {
+    const a = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')).oauthAccount ?? {};
+    return { organizationType: a.organizationType, organizationRateLimitTier: a.organizationRateLimitTier, hasExtraUsageEnabled: a.hasExtraUsageEnabled };
+  } catch {
+    return {};
+  }
 }
 
 // Claude Code asks before a tool runs; the bridge server relays the question here.
@@ -77,6 +104,8 @@ function stopClaude() {
 function startClaude({ resume } = {}) {
   stopClaude();
   saveConfig({ ...loadConfig(), lastFolder: cwd });
+  // Claude Code names its skills only once the first message is in; until then, read them from disk.
+  if (!resume) skillInfo = describeSkills(listSkills(homedir()), homedir());
   const base = prepareSession({ pluginDir, key: geminiKey ?? null });
   const mcp = {
     mcpServers: {
@@ -101,6 +130,8 @@ function startClaude({ resume } = {}) {
     '--mcp-config',
     JSON.stringify(mcp),
     ...sessionGuard(folderMode),
+    ...(CLAUDE_MODELS.has(settings().model) ? ['--model', settings().model] : []),
+    ...(settings().effort !== 'default' ? ['--effort', settings().effort] : []),
     ...(resume ? ['--resume', resume] : []),
   ];
   const child = spawn('claude', args, { cwd, env: base.env, windowsHide: true });
@@ -109,7 +140,11 @@ function startClaude({ resume } = {}) {
   createInterface({ input: child.stdout }).on('line', (line) => {
     if (claude !== child) return;
     for (const event of parseLine(line)) {
-      if (event.kind === 'init') sessionId = event.sessionId;
+      if (event.kind === 'init') {
+        sessionId = event.sessionId;
+        skillInfo = describeSkills(event.skills, homedir());
+        send('payer', payer({ apiKeySource: event.apiKeySource, account: account() }));
+      }
       send('event', event);
     }
   });
@@ -195,8 +230,25 @@ ipcMain.on('permission-answer', (_e, { id, tool, allow, always }) => {
 
 ipcMain.handle('cook', async (_e, text) => {
   if (!geminiKey) return { error: 'no Gemini key; add one in settings' };
+  const s = settings();
   try {
-    return await cookPrompt(text, { key: geminiKey, models: REWRITE_MODELS });
+    return await cookPrompt(text, {
+      key: geminiKey,
+      rewrite: s.cook,
+      pickSkills: s.pickSkills,
+      skills: skillInfo,
+      rewriteModels: REWRITE_MODELS,
+      routeModels: ROUTE_MODELS,
+    });
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('quick', async (_e, history) => {
+  if (!geminiKey) return { error: 'no Gemini key; add one in settings' };
+  try {
+    return await quickAnswer(history, { key: geminiKey, rewriteModels: REWRITE_MODELS });
   } catch (err) {
     return { error: err.message };
   }
@@ -209,9 +261,14 @@ ipcMain.handle('toggle-theme', () => {
   return look(next);
 });
 
-ipcMain.handle('set-settings', (_e, { cook, autoEdits, key }) => {
-  const config = loadConfig();
-  saveConfig({ ...config, ...(cook === undefined ? {} : { cook }), ...(autoEdits === undefined ? {} : { autoEdits }) });
+ipcMain.handle('set-settings', (_e, { key, ...changes }) => {
+  const before = settings();
+  const known = ['cook', 'pickSkills', 'autoEdits', 'model', 'effort'];
+  saveConfig({ ...loadConfig(), ...Object.fromEntries(Object.entries(changes).filter(([name, v]) => known.includes(name) && v !== undefined)) });
+  const after = settings();
+  // A different Claude model or effort takes a restart; the conversation carries on.
+  const claudeChanged = (before.model !== after.model && CLAUDE_MODELS.has(after.model)) || before.effort !== after.effort;
+  if (claudeChanged && cwd) startClaude({ resume: sessionId });
   if (key !== undefined) {
     if (key) saveKey(key);
     else clearKey();

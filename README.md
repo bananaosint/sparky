@@ -4,6 +4,17 @@ Spark is a standalone Windows app for coding with Claude: its own vibrant window
 
 ![Sparky](assets/sparky.png)
 
+## Why Spark
+
+Claude Code does the work. Spark handles what's around it:
+
+- **Clearer prompts:** Gemini turns a rough prompt into a clear one and lists what Claude should ask before starting. You see and edit every rewrite before it's sent.
+- **Rules that stick:** Spark's rules (ask before guessing, test first, build only what was asked, no filler) go with every request, not just the first.
+- **Undo that covers the shell:** before each prompt Spark snapshots the working tree, including files that shell commands changed, which Claude Code's `/rewind` misses.
+- **Changes you can see:** the diff pane and band show what each turn changed; `/sandbox` ends every turn with keep or revert.
+- **Failures one key away:** a command that fails under `spark try` in your own terminal lands in the prompt box with secrets stripped.
+- **Contained subagents:** at most two at a time, no nesting, and a worktree merges only after its tests pass.
+
 ## Install
 
 One line in PowerShell:
@@ -21,6 +32,12 @@ It installs Claude Code too if it's missing, downloads the latest Spark installe
 - **You approve tools:** when Claude wants to run a command or change a file, a card asks: Allow, Always allow (that tool, this chat), or Deny. Settings can let file edits through without asking.
 - **Gemini cooks your prompt:** Enter sends your words to Gemini, which rewrites them clearly (with a suitably dramatic role); the rewrite lands in the box to edit, Enter again sends it, Esc restores yours, a leading `\` skips it. Add a Gemini API key in ⚙ settings ([free key](https://aistudio.google.com/apikey)); it's stored encrypted for your Windows account.
 - **Images:** Ctrl+V pastes a screenshot into the message, or drag an image in.
+- **Skills:** Gemini (flash-lite) picks which of your installed skills Claude should use; they show as chips above the box and ride along in a `Skills:` line.
+- **Models:** pick Claude Opus, Sonnet or Haiku and an effort level next to the box (or `/model sonnet`, `/effort high`), or **Gemini · quick answers** for fast replies that never touch your files or your Claude plan.
+- **Modes:** `/antislop` (also `/red-team`, `/grillme`) turns a Spark mode on for every message; its chip turns it off. Other `/commands` go straight to Claude Code.
+- **What it costs, and who pays:** after each turn: the API-rate price Claude Code reports, the model, tokens in and out, tool calls, and whether it counts toward your Claude plan (not billed per message) or is billed to an API key. Gemini answers say they run on your Gemini key's project.
+- **Header:** the folder you're in, the model answering, the effort level.
+- **Settings:** turn off Gemini's rewriting, its skill picks, or both.
 - **Folders and chats:** the header button opens another project folder; ＋ New starts a fresh chat; ■ stops Claude mid-turn and keeps the conversation.
 
 Spark keeps Claude Code's own configuration, sign-in, and Spark's guardrails (MISP rules, snapshots) underneath.
@@ -113,6 +130,23 @@ Two looks: `spark theme` shows the current one, `spark theme teal` switches to t
 - **In the session:** the mod unsets the key from Claude Code's environment at startup, so shell commands Claude runs don't inherit it. Neither measure stops a process running as you.
 - **What leaves your machine for Gemini:** your typed prompt, with secrets swapped for `«secret-N»` placeholders, and your skills' names and descriptions. The placeholders are swapped back before the rewrite lands in the box.
 - **What leaves your machine for skills.sh:** up to two short keyword queries (60 characters at most) that Gemini writes from your redacted prompt, such as `playwright e2e`. Not the prompt itself. Turn it off with "Search skills.sh" in `/config`.
+
+## Roadmap
+
+Planned in the design (`docs/design/2026-10-09--spark--design.md`); none of this exists yet.
+
+Next:
+- **Command gate (F1):** risky shell commands are blocked, or wait for your approval with a dry-run preview, such as how many files a delete would remove.
+- **Test gate (F4):** when a turn changed files, Spark runs the repo's tests before Claude can finish and sends failures back.
+- **Halt after two failures (F10):** after two failed builds or test runs in a row, Claude stops editing until it writes a post-mortem.
+- **Leaner context (F5):** long command output is trimmed (the full copy is saved), and lockfiles, build output and `node_modules` can't be read into the conversation.
+- **Saved plans (F7):** a plan you approve in plan mode is saved to `docs/design/`.
+- **UI taste (F8):** a `spark:ui-taste` skill for interface work.
+- **Isolated subagents (F2):** a `spark:implementer` agent that always works in its own worktree. The caps and the test-then-merge gate already exist.
+
+Later:
+- **Code map (F3):** `spark map` draws the call graph of files changed since the last snapshot.
+- **Scanner (F9):** `spark scan` runs osv-scanner and `/security-review`, and flags instruction-like text in diffs.
 
 ## Develop
 

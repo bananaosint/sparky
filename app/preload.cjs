@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('spark', {
   openFolder: () => ipcRenderer.send('open-folder'),
   answerPermission: (answer) => ipcRenderer.send('permission-answer', answer),
   cook: (text) => ipcRenderer.invoke('cook', text),
+  quick: (history) => ipcRenderer.invoke('quick', history),
   toggleTheme: () => ipcRenderer.invoke('toggle-theme'),
   setSettings: (changes) => ipcRenderer.invoke('set-settings', changes),
   openExternal: (url) => ipcRenderer.send('open-external', url),

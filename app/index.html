@@ -39,13 +39,29 @@
 
     <form id="composer" autocomplete="off">
       <div id="attachments"></div>
+      <div id="chips" class="chips-row"></div>
       <textarea
         id="input"
         rows="1"
-        placeholder="Ask Sparky to build something…   Enter sends · Shift+Enter new line · paste images with Ctrl+V"
+        placeholder="Ask Sparky to build something…   Enter sends · Shift+Enter new line · Ctrl+V pastes images · /antislop, /model, /effort"
       ></textarea>
       <div class="composer-bar">
         <button type="button" id="cook-toggle" class="pill" title="Rewrite prompts with Gemini before sending">⚡ Cook</button>
+        <select id="model-pick" title="Who answers: a Claude model, or Gemini for quick answers">
+          <option value="default">Claude (default model)</option>
+          <option value="opus">Claude Opus</option>
+          <option value="sonnet">Claude Sonnet</option>
+          <option value="haiku">Claude Haiku</option>
+          <option value="gemini">⚡ Gemini · quick answers</option>
+        </select>
+        <select id="effort-pick" title="How hard Claude thinks">
+          <option value="default">effort: default</option>
+          <option value="low">effort: low</option>
+          <option value="medium">effort: medium</option>
+          <option value="high">effort: high</option>
+          <option value="xhigh">effort: xhigh</option>
+          <option value="max">effort: max</option>
+        </select>
         <span id="note"></span>
         <span class="spacer"></span>
         <button type="button" id="stop" class="stop" title="Stop" hidden>■</button>
@@ -60,7 +76,8 @@
           <input id="key" type="password" placeholder="paste a key from aistudio.google.com/apikey" />
         </label>
         <p class="hint" id="key-state"></p>
-        <label class="check"><input id="cook" type="checkbox" /> Cook prompts with Gemini before sending</label>
+        <label class="check"><input id="cook" type="checkbox" /> Rewrite my prompts with Gemini before sending</label>
+        <label class="check"><input id="pick-skills" type="checkbox" /> Let Gemini pick the skills Claude should use</label>
         <label class="check"><input id="auto-edits" type="checkbox" /> Let Claude edit files without asking</label>
         <div class="dialog-actions">
           <button type="button" id="save-settings">Save</button>
@@ -71,6 +88,6 @@
 
     <script src="node_modules/marked/lib/marked.umd.js"></script>
     <script src="node_modules/dompurify/dist/purify.min.js"></script>
-    <script src="renderer.js"></script>
+    <script type="module" src="renderer.js"></script>
   </body>
 </html>

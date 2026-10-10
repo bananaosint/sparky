@@ -16,7 +16,8 @@ export function parseLine(line) {
   } catch {
     return [];
   }
-  if (j.type === 'system' && j.subtype === 'init') return [{ kind: 'init', sessionId: j.session_id, model: j.model }];
+  if (j.type === 'system' && j.subtype === 'init')
+    return [{ kind: 'init', sessionId: j.session_id, model: j.model, skills: j.skills ?? [], apiKeySource: j.apiKeySource }];
   if (j.type === 'stream_event' && j.event?.type === 'content_block_delta' && j.event.delta?.type === 'text_delta')
     return [{ kind: 'delta', text: j.event.delta.text }];
   if (j.type === 'assistant')
@@ -35,6 +36,12 @@ export function parseLine(line) {
         text: j.result ?? '',
         costUsd: j.total_cost_usd ?? 0,
         durationMs: j.duration_ms ?? 0,
+        usage: {
+          input: j.usage?.input_tokens ?? 0,
+          output: j.usage?.output_tokens ?? 0,
+          cacheRead: j.usage?.cache_read_input_tokens ?? 0,
+          cacheWrite: j.usage?.cache_creation_input_tokens ?? 0,
+        },
       },
     ];
   return [];
