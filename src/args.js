@@ -2,6 +2,8 @@ export function parseArgs(argv) {
   const [first, second] = argv;
   if (first === 'help' || first === '--help' || first === '-h') return { command: 'help' };
   if (first === 'doctor') return { command: 'doctor' };
+  if (first === 'install') return { command: 'install' };
+  if (first === 'uninstall') return { command: 'uninstall' };
   if (first === 'key') {
     if (second === 'set') return { command: 'key-set' };
     if (second === 'clear') return { command: 'key-clear' };

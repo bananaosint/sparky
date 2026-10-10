@@ -193,4 +193,5 @@ test('the band draws the spark label letter by letter in the blue-to-ultraviolet
   expect(json).toContain('#38BDF8')
   expect(json).toContain('#A855F7')
   expect(json).toContain('gemini off: run spark key set')
+  expect(json).toContain('"type":"Image"')
 })

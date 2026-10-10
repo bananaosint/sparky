@@ -10,7 +10,7 @@ Claude Code, launched with a Gemini prompt cook, modes and a Spark look. Windows
    ▝▀╯ ╰▀▘
 ```
 
-Sparky Bug, Spark's mascot, greets you in the launcher banner. Claude Code's own welcome screen, crab included, follows below it; Spark can't change that screen, but the theme recolors everything else blue to ultraviolet.
+Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own welcome screen, crab included, follows below it; Spark can't change that screen, but the theme recolors everything else blue to ultraviolet.
 
 ## Install
 

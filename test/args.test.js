@@ -43,3 +43,8 @@ test('spark try takes the command to run, with or without --', () => {
   assert.deepEqual(parseArgs(['try', '--', 'npm', 'test', '--', '-t', 'login']), { command: 'try', argv: ['npm', 'test', '--', '-t', 'login'] });
   assert.equal(parseArgs(['try']).error, 'spark try needs a command, e.g. spark try npm test');
 });
+
+test('install and uninstall subcommands', () => {
+  assert.deepEqual(parseArgs(['install']), { command: 'install' });
+  assert.deepEqual(parseArgs(['uninstall']), { command: 'uninstall' });
+});

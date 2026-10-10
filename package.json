@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "description": "A launcher and mod for Claude Code on Windows: Gemini-cooked prompts, modes, guardrails.",
   "repository": {
@@ -26,7 +26,8 @@
     "test": "npm run test:launcher && npm run test:mod",
     "test:launcher": "node --test \"test/*.test.js\"",
     "test:mod": "claude plugin test plugin",
-    "check": "tsc -p tsconfig.json && claude plugin validate plugin"
+    "check": "tsc -p tsconfig.json && claude plugin validate plugin",
+    "assets": "node scripts/sparky-assets.js"
   },
   "engines": {
     "node": ">=24"

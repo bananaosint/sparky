@@ -23,6 +23,7 @@ import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
 import { failurePrompt, parseFailure, trimOutput } from './failure'
 import { FACES, mood } from './mascot'
+import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
 import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
@@ -671,7 +672,10 @@ export const register: Register = (on, options) => {
       read($, SANDBOX),
       read($, DIFFSTAT),
     ])
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button } = elements
+    // Only the terminal surface draws images.
+    const Image = 'Image' in elements && !plainBand ? elements.Image : undefined
     const face = FACES[
       mood({
         working: e.props.isWorking,
@@ -701,6 +705,9 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box>
+          {/* Pixel Sparky where the terminal draws images; nothing extra where it can't. */}
+          {Image ? <Image source={{ rgba: SPARKY_RGBA, width: 16, height: 16 }} columns={2} rows={1} alt=" " /> : null}
+          {Image ? <Text> </Text> : null}
           {[...(plainBand ? '✦ spark' : face)].map((ch, i) => (
             <Text color={failure ? ERROR : LABEL_COLORS[i]} bold>
               {ch}

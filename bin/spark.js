@@ -9,6 +9,7 @@ import { sessionSettings, claudeArgs } from '../src/settings.js';
 import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
 import { tryCommand, shellLine } from '../src/failure.js';
+import { install, uninstall } from '../src/install.js';
 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -20,6 +21,8 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
     --                          pass everything after it to claude
+  spark install                 add a Spark profile to Windows Terminal and Sparky shortcuts
+  spark uninstall               remove them
   spark try <command>           run a command; if it fails, the Spark band offers to send it to Claude
   spark key set                 store your Gemini API key, encrypted for your Windows account
   spark key clear               delete the stored key
@@ -137,6 +140,17 @@ switch (args.command) {
     break;
   case 'doctor':
     await doctor();
+    break;
+  case 'install': {
+    const { fragmentDir, shortcuts } = install({ pngPath: join(root, 'assets', 'sparky.png'), icoPath: join(root, 'assets', 'sparky.ico') });
+    console.log(`Windows Terminal profile "Spark": ${fragmentDir}`);
+    for (const lnk of shortcuts) console.log(`shortcut: ${lnk}`);
+    console.log('Restart Windows Terminal to see the Spark profile.');
+    break;
+  }
+  case 'uninstall':
+    uninstall();
+    console.log('Spark profile and shortcuts removed.');
     break;
   case 'try': {
     const { exitCode, recorded } = await tryCommand({ command: shellLine(args.argv) });
