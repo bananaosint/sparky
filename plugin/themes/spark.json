@@ -1,0 +1,27 @@
+{
+  "name": "Spark",
+  "base": "dark",
+  "overrides": {
+    "claude": "#A78BFA",
+    "claudeShimmer": "#7DD3FC",
+    "promptBorder": "#6366F1",
+    "promptBorderShimmer": "#A5B4FC",
+    "planMode": "#38BDF8",
+    "autoAccept": "#E879F9",
+    "bashBorder": "#60A5FA",
+    "permission": "#C084FC",
+    "permissionShimmer": "#E9D5FF",
+    "suggestion": "#818CF8",
+    "success": "#4ADE80",
+    "error": "#FB7185",
+    "warning": "#FACC15",
+    "subtle": "#475569",
+    "inactive": "#94A3B8",
+    "inactiveShimmer": "#CBD5E1",
+    "userMessageBackground": "#15132B",
+    "userMessageBackgroundHover": "#1E1B4B",
+    "selectionBg": "#312E81",
+    "diffAdded": "#14532D",
+    "diffRemoved": "#7F1D1D"
+  }
+}

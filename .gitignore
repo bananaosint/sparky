@@ -1,0 +1,5 @@
+node_modules/
+.types/
+plugin/.claude-plugin/types/
+plugin/tsconfig.json
+.spark/

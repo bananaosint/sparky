@@ -1,0 +1,50 @@
+{
+  "name": "spark",
+  "version": "0.2.0",
+  "author": { "name": "BananaOSINT" },
+  "description": "Gemini-cooked prompts, modes and guardrails for Claude Code.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "rewrite_models": {
+      "type": "string",
+      "title": "Rewrite models",
+      "description": "Gemini models that rewrite your prompt before you send it, comma-separated; the next is tried when one is out of quota or failing",
+      "default": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-31b-it"
+    },
+    "rewrite_thinking": {
+      "type": "string",
+      "title": "Rewrite thinking level",
+      "description": "Gemini thinking level for the rewrite",
+      "options": ["minimal", "low", "medium", "high"],
+      "default": "low"
+    },
+    "route_models": {
+      "type": "string",
+      "title": "Skill routing models",
+      "description": "Gemini models that pick which skills Claude should load, comma-separated, tried in order",
+      "default": "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    },
+    "skill_search": {
+      "type": "boolean",
+      "title": "Search skills.sh",
+      "description": "Let the routing model search skills.sh for skills you don't have and suggest installing them",
+      "default": true
+    },
+    "min_words": {
+      "type": "number",
+      "title": "Words before cooking",
+      "description": "Prompts shorter than this are sent as typed",
+      "default": 4,
+      "min": 1,
+      "max": 50
+    },
+    "timeout_ms": {
+      "type": "number",
+      "title": "Gemini timeout (ms)",
+      "description": "After this long the prompt stays as typed",
+      "default": 10000,
+      "min": 1000,
+      "max": 30000
+    }
+  }
+}

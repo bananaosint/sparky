@@ -1,0 +1,37 @@
+{
+  "name": "spark",
+  "version": "0.2.0",
+  "private": true,
+  "description": "A launcher and mod for Claude Code on Windows: Gemini-cooked prompts, modes, guardrails.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bananaosint/sparky.git"
+  },
+  "os": [
+    "win32"
+  ],
+  "type": "module",
+  "bin": {
+    "spark": "bin/spark.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "plugin/.claude-plugin/plugin.json",
+    "plugin/hooks/",
+    "plugin/themes/",
+    "assets/"
+  ],
+  "scripts": {
+    "test": "npm run test:launcher && npm run test:mod",
+    "test:launcher": "node --test \"test/*.test.js\"",
+    "test:mod": "claude plugin test plugin",
+    "check": "tsc -p tsconfig.json && claude plugin validate plugin"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

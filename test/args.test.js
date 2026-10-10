@@ -1,0 +1,39 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseArgs } from '../src/args.js';
+
+test('no arguments means run', () => {
+  assert.deepEqual(parseArgs([]), { command: 'run', plain: false, gemini: true, passthrough: [] });
+});
+
+test('spark run strips the word run', () => {
+  assert.equal(parseArgs(['run']).command, 'run');
+});
+
+test('spark flags are consumed, everything else passes through to claude', () => {
+  assert.deepEqual(parseArgs(['--plain', '-c', '--no-gemini', '--model', 'opus']), {
+    command: 'run',
+    plain: true,
+    gemini: false,
+    passthrough: ['-c', '--model', 'opus'],
+  });
+});
+
+test('everything after -- passes through untouched, spark flags included', () => {
+  assert.deepEqual(parseArgs(['--', '--plain']).passthrough, ['--plain']);
+});
+
+test('key subcommands', () => {
+  assert.deepEqual(parseArgs(['key', 'set']), { command: 'key-set' });
+  assert.deepEqual(parseArgs(['key', 'clear']), { command: 'key-clear' });
+});
+
+test('key without a valid action is help', () => {
+  assert.deepEqual(parseArgs(['key']), { command: 'help', error: 'spark key needs set or clear' });
+});
+
+test('doctor and help', () => {
+  assert.deepEqual(parseArgs(['doctor']), { command: 'doctor' });
+  assert.deepEqual(parseArgs(['help']), { command: 'help' });
+  assert.deepEqual(parseArgs(['--help']), { command: 'help' });
+});
