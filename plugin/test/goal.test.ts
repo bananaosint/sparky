@@ -11,6 +11,10 @@ test('parseGoal reads the goal and optional time and token limits', () => {
   expect(parseGoal('fix it --time 2h --tokens 1m')).toEqual({ text: 'fix it', limits: { timeMs: 7_200_000, tokens: 1_000_000 } })
   expect(parseGoal('fix it --time soon')).toEqual({ error: '--time takes a duration like 45m, 90s or 2h' })
   expect('error' in parseGoal('--tokens 5k')).toBe(true)
+  expect(parseGoal('<"a full standalone app"> --time 90m --tokens 2m.  continue')).toEqual({
+    text: 'a full standalone app continue',
+    limits: { timeMs: 90 * 60_000, tokens: 2_000_000 },
+  })
 })
 
 test('a turn costs its new tokens, not the cache reads', () => {

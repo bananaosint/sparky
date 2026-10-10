@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+    />
+    <title>Spark</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="ultraviolet">
+    <header id="bar">
+      <canvas id="mini" width="16" height="16" aria-hidden="true"></canvas>
+      <div class="brand">
+        <div class="word">SPARK</div>
+        <div id="status" class="status">starting…</div>
+      </div>
+      <nav class="actions">
+        <button id="new" title="Start a new chat">＋ New</button>
+        <button id="folder" title="Open another project folder">folder</button>
+        <button id="theme" title="Switch between ultraviolet and teal">◐</button>
+        <button id="gear" title="Settings">⚙</button>
+      </nav>
+    </header>
+
+    <main id="messages">
+      <section id="welcome">
+        <canvas id="hero" width="16" height="16" aria-hidden="true"></canvas>
+        <h1>What are we building<span id="where"></span>?</h1>
+        <p class="hint">Ask in plain words. Gemini sharpens your prompt first; Enter again sends it.</p>
+        <div class="chips">
+          <button class="chip">Explain how this project is put together</button>
+          <button class="chip">Find a bug in this codebase and fix it, test first</button>
+          <button class="chip">Write tests for the least-tested module</button>
+        </div>
+      </section>
+    </main>
+
+    <form id="composer" autocomplete="off">
+      <div id="attachments"></div>
+      <textarea
+        id="input"
+        rows="1"
+        placeholder="Ask Sparky to build something…   Enter sends · Shift+Enter new line · paste images with Ctrl+V"
+      ></textarea>
+      <div class="composer-bar">
+        <button type="button" id="cook-toggle" class="pill" title="Rewrite prompts with Gemini before sending">⚡ Cook</button>
+        <span id="note"></span>
+        <span class="spacer"></span>
+        <button type="button" id="stop" class="stop" title="Stop" hidden>■</button>
+        <button type="submit" id="send" class="send" title="Send">↑</button>
+      </div>
+    </form>
+
+    <dialog id="settings">
+      <form method="dialog">
+        <h2>Settings</h2>
+        <label class="row">Gemini API key
+          <input id="key" type="password" placeholder="paste a key from aistudio.google.com/apikey" />
+        </label>
+        <p class="hint" id="key-state"></p>
+        <label class="check"><input id="cook" type="checkbox" /> Cook prompts with Gemini before sending</label>
+        <label class="check"><input id="auto-edits" type="checkbox" /> Let Claude edit files without asking</label>
+        <div class="dialog-actions">
+          <button type="button" id="save-settings">Save</button>
+          <button value="close">Close</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="node_modules/marked/lib/marked.umd.js"></script>
+    <script src="node_modules/dompurify/dist/purify.min.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

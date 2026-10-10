@@ -1,37 +1,28 @@
-# Spark installer for Windows. Run in PowerShell:
+# Sparky: one line installs the Spark app, and Claude Code if it's missing. In PowerShell:
 #   irm https://raw.githubusercontent.com/bananaosint/sparky/main/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
+# The progress bar makes downloads several times slower in Windows PowerShell.
+$ProgressPreference = 'SilentlyContinue'
 
-function Require($command, $hint) {
-  if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-    Write-Host "Spark needs $command. $hint" -ForegroundColor Red
-    throw "missing $command"
-  }
+Write-Host 'Installing Sparky...' -ForegroundColor Cyan
+
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  Write-Host "Claude Code isn't installed yet; installing it with Anthropic's installer..." -ForegroundColor Yellow
+  Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression
 }
 
-Write-Host 'Installing Spark...' -ForegroundColor Cyan
-Require node 'Install Node.js 24 or newer from https://nodejs.org, then run this again.'
-$major = [int]((node --version).TrimStart('v').Split('.')[0])
-if ($major -lt 24) {
-  Write-Host "Spark needs Node.js 24 or newer; this machine has $(node --version)." -ForegroundColor Red
-  throw 'node too old'
-}
-Require git 'Install Git for Windows from https://git-scm.com/download/win, then run this again.'
-Require claude 'Install Claude Code from https://claude.com/claude-code, then run this again.'
+$release = Invoke-RestMethod 'https://api.github.com/repos/bananaosint/sparky/releases/latest'
+$asset = $release.assets | Where-Object { $_.name -like 'Spark-Setup-*.exe' } | Select-Object -First 1
+if (-not $asset) { throw "The latest release ($($release.tag_name)) has no Spark installer." }
 
-npm install -g github:bananaosint/sparky
-if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+$setup = Join-Path $env:TEMP $asset.name
+Invoke-WebRequest $asset.browser_download_url -OutFile $setup -UseBasicParsing
+# One-click, per-user install: no admin rights, Start Menu and desktop shortcuts.
+Start-Process $setup -ArgumentList '/S' -Wait
+Remove-Item $setup
 
-# Windows Terminal profile with Sparky's icon and background, plus Start Menu and desktop shortcuts.
-spark install
-
-if ((spark doctor | Out-String) -match 'no Gemini key') {
-  if ([Console]::IsInputRedirected) {
-    Write-Host 'Add your Gemini API key with: spark key set' -ForegroundColor Yellow
-  } else {
-    Write-Host 'Paste a Gemini API key (free from https://aistudio.google.com/apikey) to turn on prompt cooking.' -ForegroundColor Cyan
-    spark key set
-  }
-}
-
-Write-Host 'Spark is ready. Open "Spark" from the Start Menu, or run spark in any project folder.' -ForegroundColor Green
+$app = Join-Path $env:LOCALAPPDATA 'Programs\Spark\Spark.exe'
+if (-not (Test-Path $app)) { throw "Spark did not install to $app." }
+Write-Host "Sparky $($release.tag_name) is installed. Opening Spark..." -ForegroundColor Green
+Write-Host 'If Claude Code is new on this machine, run claude once in a terminal to sign in.' -ForegroundColor DarkGray
+Start-Process $app

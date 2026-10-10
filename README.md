@@ -1,34 +1,42 @@
-# Spark
+# Sparky
 
-Claude Code, launched with a Gemini prompt cook, modes and a Spark look. Windows only.
+Spark is a standalone Windows app for coding with Claude: its own vibrant window, not a terminal. Claude Code does the work underneath; Spark gives it a new face.
 
-When `spark` starts, Sparky assembles from scattered pixels, drawn two pixels per character in truecolor. His eyes ignite like a neon tube (flicker, then white-hot cores), the glow bleeds into the pixels around them, he glances left and back, his bolts flash, and the SPARK wordmark sweeps in. It takes under 0.9 s and plays while Claude Code is already starting, so it adds no wait. `--no-anim` shows the final frame only; `--plain` shows nothing.
-
-
-Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon, a dark gradient background and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own header follows, with Sparky where the mascot was: Spark runs Claude Code in its own pseudo-terminal (`node-pty`) and redraws the mascot's cells as Sparky on their way to your screen. `claude.exe` itself is never touched, so it stays signed and keeps updating. `spark --direct` (or `--plain`) runs Claude Code without that layer.
+![Sparky](assets/sparky.png)
 
 ## Install
 
-Needs Windows, [Node.js 24+](https://nodejs.org), git and [Claude Code](https://claude.com/claude-code). In PowerShell:
+One line in PowerShell:
 
 ```
 irm https://raw.githubusercontent.com/bananaosint/sparky/main/install.ps1 | iex
 ```
 
-The installer checks those three, installs Spark from GitHub, adds a "Spark" Windows Terminal profile plus Start Menu and desktop shortcuts, and asks for a [Gemini API key](https://aistudio.google.com/apikey) (stored encrypted for your Windows account). Without a key Spark still runs; prompts are sent as typed.
+It installs Claude Code too if it's missing, downloads the latest Spark installer from [Releases](https://github.com/bananaosint/sparky/releases), installs it for your user (no admin rights; Start Menu and desktop shortcuts) and opens it. If Claude Code is new on the machine, run `claude` once in a terminal to sign in. Or download `Spark-Setup-<version>.exe` from Releases and run it.
 
-By hand: `npm install -g github:bananaosint/sparky`, then `spark install` and `spark key set`. Each [release](https://github.com/bananaosint/sparky/releases) also has a `.tgz` for `npm install -g spark-<version>.tgz`. Update by running the installer again; uninstall with `spark uninstall` and `npm uninstall -g spark`.
+## The app
+
+- **Its own look:** pixel-art Sparky assembles on the welcome screen, his eyes flicker on and glow, and he blinks and glances around while you work. Ultraviolet or teal gradient themes (◐ in the header), glass panels, glowing composer.
+- **Chat, not a terminal:** Claude's answers stream in as formatted text; every tool call is a card (shell commands, edits as diffs, file writes, searches, to-do lists) you can open for details and output.
+- **You approve tools:** when Claude wants to run a command or change a file, a card asks: Allow, Always allow (that tool, this chat), or Deny. Settings can let file edits through without asking.
+- **Gemini cooks your prompt:** Enter sends your words to Gemini, which rewrites them clearly (with a suitably dramatic role); the rewrite lands in the box to edit, Enter again sends it, Esc restores yours, a leading `\` skips it. Add a Gemini API key in ⚙ settings ([free key](https://aistudio.google.com/apikey)); it's stored encrypted for your Windows account.
+- **Images:** Ctrl+V pastes a screenshot into the message, or drag an image in.
+- **Folders and chats:** the header button opens another project folder; ＋ New starts a fresh chat; ■ stops Claude mid-turn and keeps the conversation.
+
+Spark keeps Claude Code's own configuration, sign-in, and Spark's guardrails (MISP rules, snapshots) underneath.
+
+## Terminal version
+
+The `spark` command runs Claude Code in your terminal with the same Gemini cooking, modes and Sparky look:
+
+```
+npm install -g github:bananaosint/sparky
+spark install      # Windows Terminal profile and shortcuts
+spark key set      # your Gemini API key
+spark              # in any project folder
+```
 
 Use a key from a billing-enabled Google project. On the free tier, Google may use prompts to improve its products and human reviewers may read them.
-
-### From a clone
-
-```
-git clone https://github.com/bananaosint/sparky.git
-cd sparky
-npm install
-npm link            # puts `spark` on PATH (undo: npm unlink -g spark)
-```
 
 ## Use
 
@@ -107,6 +115,9 @@ Two looks: `spark theme` shows the current one, `spark theme teal` switches to t
 - **What leaves your machine for skills.sh:** up to two short keyword queries (60 characters at most) that Gemini writes from your redacted prompt, such as `playwright e2e`. Not the prompt itself. Turn it off with "Search skills.sh" in `/config`.
 
 ## Develop
+
+The app lives in `app/` (Electron): `cd app && npm install && npm start` runs it from source, `npm run dist` builds `app/dist/Spark-Setup-<version>.exe`, `npm test` runs its tests.
+
 
 ```
 npm install     # dev dependencies (TypeScript)

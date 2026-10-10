@@ -1,0 +1,65 @@
+{
+  "name": "spark-app",
+  "productName": "Spark",
+  "version": "1.0.0",
+  "description": "Spark: Claude Code in its own window, with Sparky, Gemini-cooked prompts and the Spark look.",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "stage": "node stage.js",
+    "start": "npm run stage && electron .",
+    "dist": "npm run stage && electron-builder --win nsis",
+    "test": "npm run stage && node --test \"test/*.test.js\""
+  },
+  "build": {
+    "appId": "dev.bananaosint.spark",
+    "productName": "Spark",
+    "npmRebuild": false,
+    "files": [
+      "main.js",
+      "preload.cjs",
+      "index.html",
+      "renderer.js",
+      "styles.css",
+      "lib/**",
+      "staged/src/**",
+      "staged/plugin/hooks/**",
+      "staged/plugin/types/**"
+    ],
+    "extraResources": [
+      {
+        "from": "staged/plugin",
+        "to": "plugin"
+      },
+      {
+        "from": "staged/assets",
+        "to": "assets"
+      },
+      {
+        "from": "bridge",
+        "to": "bridge"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "staged/assets/sparky.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Spark",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "Spark-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "marked": "18.1.0"
+  }
+}

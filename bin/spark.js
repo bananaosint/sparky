@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../src/args.js';
-import { sessionSettings, claudeArgs } from '../src/settings.js';
+import { prepareSession, configuredTheme } from '../src/session.js';
 import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
 import { tryCommand, shellLine } from '../src/failure.js';
@@ -53,10 +53,6 @@ function loadPty() {
   }
 }
 
-const configuredTheme = () => {
-  const { theme } = loadConfig();
-  return THEME_NAMES.includes(theme) ? theme : 'ultraviolet';
-};
 
 const assetPath = (name) => join(root, 'assets', name);
 
@@ -90,20 +86,13 @@ async function runSkinned(pty, args, env, theme, intro) {
 }
 
 function run({ plain, gemini, direct, animate, passthrough }) {
-  const key = gemini ? loadKey() : undefined;
-  const theme = configuredTheme();
-  const state = !gemini ? 'gemini off' : key ? 'gemini on' : 'gemini off: run spark key set';
+  const { args, env, theme, state } = prepareSession({ pluginDir, plain, gemini, passthrough });
   const intro = plain ? undefined : frames({ theme, subline: `${basename(process.cwd())} · ${state}` });
   const showIntro = async () => {
     if (!intro) return;
     if (animate && process.stdout.isTTY && !process.env.NO_COLOR) await playIntro(intro);
     else console.log(intro.at(-1));
   };
-  const env = { ...process.env };
-  if (key) env.SPARK_GEMINI_KEY = key;
-  env.SPARK_THEME = theme;
-  if (plain) env.SPARK_PLAIN = '1';
-  const args = claudeArgs({ pluginDir, settings: sessionSettings({ plain, theme }), passthrough });
   const pty = plain || direct || !process.stdin.isTTY || !process.stdout.isTTY ? undefined : loadPty();
   if (pty) return runSkinned(pty, args, env, theme, showIntro);
   if (intro) console.log(intro.at(-1));

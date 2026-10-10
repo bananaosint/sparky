@@ -17,13 +17,15 @@ export function parseGoal(args: string): { text: string; limits: GoalLimits } | 
       words.push(flag)
       continue
     }
-    const value = (parts[++i] ?? '').toLowerCase()
+    // A sentence's full stop or comma after the value is not part of it.
+    const value = (parts[++i] ?? '').toLowerCase().replace(/[.,;:!]+$/, '')
     const m = flag === '--time' ? /^(\d+(?:\.\d+)?)([smh])$/.exec(value) : /^(\d+(?:\.\d+)?)([km]?)$/.exec(value)
     if (!m) return { error: flag === '--time' ? '--time takes a duration like 45m, 90s or 2h' : '--tokens takes a count like 200k or 1m' }
     if (flag === '--time') limits.timeMs = Number(m[1]) * UNITS_MS[m[2]!]!
     else limits.tokens = Number(m[1]) * UNITS_TOKENS[m[2]!]!
   }
-  const text = words.join(' ').replace(/^["']|["']$/g, '')
+  // Quotes or angle brackets around the goal are not part of it.
+  const text = words.map((w) => w.replace(/^[<"']+/, '').replace(/[>"']+$/, '')).filter(Boolean).join(' ')
   return text ? { text, limits } : { error: 'say what the goal is, e.g. /goal all tests pass --time 30m --tokens 500k' }
 }
 
