@@ -5,22 +5,19 @@ Claude Code, launched with a Gemini prompt cook, modes and a Spark look. Windows
 When `spark` starts, Sparky assembles from scattered pixels, drawn two pixels per character in truecolor. His eyes ignite like a neon tube (flicker, then white-hot cores), the glow bleeds into the pixels around them, he glances left and back, his bolts flash, and the SPARK wordmark sweeps in. It takes under 0.9 s and plays while Claude Code is already starting, so it adds no wait. `--no-anim` shows the final frame only; `--plain` shows nothing.
 
 
-Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon, a dark gradient background and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own header follows, with Sparky where the crab was: Spark runs Claude Code in its own pseudo-terminal (`node-pty`) and redraws the crab's cells as Sparky on their way to your screen. `claude.exe` itself is never touched, so it stays signed and keeps updating. `spark --direct` (or `--plain`) runs Claude Code without that layer.
+Sparky Bug, Spark's mascot, greets you in the launcher banner and, as pixel art, at the start of the band in terminals that draw images (Windows Terminal 1.22+). `spark install` adds a Windows Terminal profile named Spark, with Sparky as its tab icon, a dark gradient background and the Spark colors, plus Start Menu and desktop shortcuts with Sparky's icon; `spark uninstall` removes them. Claude Code's own header follows, with Sparky where the mascot was: Spark runs Claude Code in its own pseudo-terminal (`node-pty`) and redraws the mascot's cells as Sparky on their way to your screen. `claude.exe` itself is never touched, so it stays signed and keeps updating. `spark --direct` (or `--plain`) runs Claude Code without that layer.
 
 ## Install
 
-Needs Windows, Node 24+, git and [Claude Code](https://claude.com/claude-code) on PATH, and a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
+Needs Windows, [Node.js 24+](https://nodejs.org), git and [Claude Code](https://claude.com/claude-code). In PowerShell:
 
 ```
-npm install -g github:bananaosint/sparky
-spark key set       # paste your Gemini API key; stored encrypted for your Windows account
-spark doctor        # checks claude, git, the key, and that every Gemini model in the chains exists for it
-spark               # start Claude Code with Spark in the current folder
+irm https://raw.githubusercontent.com/bananaosint/sparky/main/install.ps1 | iex
 ```
 
-Without a key Spark still runs; prompts are sent as typed. `spark key clear` deletes the stored key.
+The installer checks those three, installs Spark from GitHub, adds a "Spark" Windows Terminal profile plus Start Menu and desktop shortcuts, and asks for a [Gemini API key](https://aistudio.google.com/apikey) (stored encrypted for your Windows account). Without a key Spark still runs; prompts are sent as typed.
 
-Update with the same install command. Uninstall with `npm uninstall -g spark`. Each [release](https://github.com/bananaosint/sparky/releases) also has a `.tgz` you can install offline with `npm install -g spark-<version>.tgz`.
+By hand: `npm install -g github:bananaosint/sparky`, then `spark install` and `spark key set`. Each [release](https://github.com/bananaosint/sparky/releases) also has a `.tgz` for `npm install -g spark-<version>.tgz`. Update by running the installer again; uninstall with `spark uninstall` and `npm uninstall -g spark`.
 
 Use a key from a billing-enabled Google project. On the free tier, Google may use prompts to improve its products and human reviewers may read them.
 
@@ -29,6 +26,7 @@ Use a key from a billing-enabled Google project. On the free tier, Google may us
 ```
 git clone https://github.com/bananaosint/sparky.git
 cd sparky
+npm install
 npm link            # puts `spark` on PATH (undo: npm unlink -g spark)
 ```
 
@@ -44,6 +42,8 @@ Run `spark` in any project folder. Claude Code starts as usual, with Spark loade
 2. The rewrite replaces your text in the prompt box. The role is the first line. Any open questions appear as "Ask me before starting:" lines, chosen skills as a `Skills:` line, and suggested installs as an "Install these skills first" list that Claude installs with `npx skills add <id> -g -y`. Delete any you don't want. Edit anything.
 3. Press **Enter** again to send it to Claude.
 
+Images: copy one and press **Ctrl+V** (or Claude Code's own **Alt+V**); Spark turns Ctrl+V into an image paste when the clipboard holds an image. Prompts with images skip the Gemini rewrite, since Spark can't see the image.
+
 These prompts are sent as typed instead:
 - prompts that start with `\`
 - Enter while the prompt is still cooking
@@ -58,6 +58,7 @@ These prompts are sent as typed instead:
 | `/sandbox` | Toggle: each turn ends with keep or revert for everything it changed |
 | `/spark-restore [N]` | List turn snapshots, or restore one (asks first; the current state is snapshotted, so it can be undone) |
 | `/spark-fix` | Send the last failed `spark try` command to Claude |
+| `/goal <goal> [--time 30m] [--tokens 500k]` | Work toward a goal: after each turn Gemini compares the changes with the goal and puts the next step in the prompt box (Enter sends it, or edit it). Ends when you press `6` (goal met) or `7` (stop), or at the time or token limit, counted across the whole goal. `/goal` shows progress, `/goal stop` ends it |
 | `/spark-agents` | Pane with subagents and worktrees; test a worktree, then merge it once its tests pass |
 | `/thinking-red-team` | Toggle adversarial security review of proposed changes |
 | `/grillme` | Toggle grill mode (also runs your grillme skill) |
@@ -92,7 +93,7 @@ runs the command with its output as usual. If it fails, Spark records it in `.gi
 Launcher flags:
 - `--plain`: no banner, theme or spinner verbs
 - `--no-gemini`: send every prompt as typed this session
-- `--direct`: run Claude Code without Spark's terminal layer (you'll see the crab)
+- `--direct`: run Claude Code without Spark's terminal layer (its own mascot shows again)
 - `--no-anim`: skip Sparky's startup animation
 
 Two looks: `spark theme` shows the current one, `spark theme teal` switches to teal and electric green, `spark theme ultraviolet` switches back. The choice is saved in `%APPDATA%\spark\config.json` and colors the intro, Sparky in the header, the band and the Claude Code theme from the next `spark`; the Windows Terminal background changes after Windows Terminal restarts.

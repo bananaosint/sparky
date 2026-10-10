@@ -7,6 +7,15 @@ export type ModeName = 'thinking-red-team' | 'grillme' | 'anti-slop'
 
 export type TurnRef = { n: number; base: string }
 
+export type Goal = {
+  text: string
+  limits: { timeMs: number; tokens: number }
+  startedAt: number
+  tokens: number
+  step: number
+  review: { met: boolean; next: string; why: string } | null
+}
+
 export type FailureRecord = { command: string; cwd: string; exitCode: number; output: string; at: number }
 
 declare module 'claude-code' {
@@ -21,6 +30,7 @@ declare module 'claude-code' {
       failure: FailureRecord | null
       diffstat: { files: number; added: number; removed: number } | null
       touched: string[]
+      goal: Goal | null
     }
   }
 }

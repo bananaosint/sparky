@@ -10,10 +10,12 @@ import {
   endpoint,
   forModel,
   parsePick,
+  parseReview,
   parseRewrite,
   parseRoute,
   parseSearch,
   pickRequest,
+  reviewRequest,
   rewriteRequest,
   routeRequest,
   searchUrl,
@@ -22,6 +24,7 @@ import type { RemoteSkill, SkillInfo } from './gemini'
 import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
 import { failurePrompt, parseFailure, trimOutput } from './failure'
+import { budgetLine, overLimit, parseGoal, turnTokens } from './goal'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
@@ -243,6 +246,7 @@ const REVIEW = { plugin: 'spark', key: 'review' } as const
 const FAILURE = { plugin: 'spark', key: 'failure' } as const
 const DIFFSTAT = { plugin: 'spark', key: 'diffstat' } as const
 const TOUCHED = { plugin: 'spark', key: 'touched' } as const
+const GOAL = { plugin: 'spark', key: 'goal' } as const
 
 const DIFF_PANE = 'spark:diff'
 const AGENTS_PANE = 'spark:agents'
@@ -258,6 +262,11 @@ const COMMANDS = [
   { name: 'spark-restore', description: 'Spark: list turn snapshots, or restore one by number', argumentHint: '[N]' },
   { name: 'sandbox', description: 'Spark: end each turn with keep or revert' },
   { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
+  {
+    name: 'goal',
+    description: 'Spark: work toward a goal; after each turn Gemini reviews the changes and proposes the next step',
+    argumentHint: '<goal> [--time 30m] [--tokens 500k] | stop',
+  },
 ]
 
 const runner =
@@ -421,6 +430,49 @@ const AGENT_MARK: Record<string, [string, string]> = {
   failed: ['✗', '#FB7185'],
 }
 
+async function endGoal($: EngineInterface, how: 'met' | 'stopped' | string) {
+  const goal = await read($, GOAL)
+  if (!goal) return
+  await $.state.set(GOAL, null)
+  $.ui.toast(how === 'met' ? `✦ goal met in ${goal.step} steps` : `✦ goal ended: ${how}`)
+  $.ui.invalidate('ui.render')
+}
+
+// After each turn toward a goal: count its tokens, end the goal at a limit, else
+// have Gemini compare the turn's changes with the goal and put the next step in the
+// prompt box, where Enter sends it as written. The person decides; nothing is sent for them.
+async function reviewGoal($: EngineInterface, e: { answer: string; usage?: Parameters<typeof turnTokens>[0] }, config: Config) {
+  const goal = await read($, GOAL)
+  if (!goal) return
+  const tokens = goal.tokens + (e.usage ? turnTokens(e.usage) : 0)
+  const spent = { ms: (await $.clock.now()) - goal.startedAt, tokens }
+  const over = overLimit(spent, goal.limits)
+  if (over) return endGoal($, `${over} (${budgetLine(spent, goal.limits)})`)
+  const next = { ...goal, tokens, step: goal.step + 1, review: null }
+  const key = await read($, KEY)
+  if (!key) {
+    await $.state.set(GOAL, next)
+    $.ui.invalidate('ui.render')
+    return
+  }
+  const changes = diffs.map((d) => `${d.path} +${d.added} -${d.removed}`).join('\n') || 'no file changes'
+  const summary = redact(`${changes}\n\nThe agent's closing message:\n${e.answer.slice(-2000)}`).text
+  try {
+    const { answer } = await firstAnswer($, key, config.rewriteModels, reviewRequest(goal.text, summary, config.rewriteThinking), config.timeoutMs)
+    const review = parseReview(answer)
+    if (!review) throw new Error('the review came back empty')
+    await $.state.set(GOAL, { ...next, review })
+    if (!review.met && review.next) {
+      await $.prompt.fill({ text: review.next })
+      await $.state.set(PHASE, { kind: 'cooked', raw: review.next, text: review.next, skills: [], ms: 0, note: 'next goal step' })
+    }
+  } catch (err) {
+    await $.state.set(GOAL, next)
+    $.ui.toast(`✦ goal review failed (${message(err)}); type the next step yourself`)
+  }
+  $.ui.invalidate('ui.render')
+}
+
 async function startWorkbench($: EngineInterface) {
   for (const command of COMMANDS) await $.command.register(command)
   try {
@@ -531,7 +583,11 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (!e.agentId) void endTurn($).catch(() => {})
+    if (!e.agentId)
+      void endTurn($)
+        .catch(() => {})
+        .then(() => reviewGoal($, e, config))
+        .catch(() => {})
     return done
   })
 
@@ -551,6 +607,30 @@ export const register: Register = (on, options) => {
     if (!(await read($, TURN))) return { text: '✦ nothing to diff yet: Spark snapshots each turn in a git repo' }
     await openDiff($)
     return { text: diffs.length ? '✦ diff pane open' : '✦ no changes this turn' }
+  })
+
+  on('command.run', { command: 'goal' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    const goal = await read($, GOAL)
+    if (!args) {
+      if (!goal) return { text: '✦ no goal. /goal <what done looks like> [--time 30m] [--tokens 500k]' }
+      const spent = { ms: (await $.clock.now()) - goal.startedAt, tokens: goal.tokens }
+      return { text: `✦ goal: ${goal.text} · step ${goal.step} · ${budgetLine(spent, goal.limits)}` }
+    }
+    if (args === 'stop') {
+      await endGoal($, 'stopped')
+      return { text: goal ? '✦ goal stopped' : '✦ no goal to stop' }
+    }
+    const parsed = parseGoal(args)
+    if ('error' in parsed) return { text: `✦ ${parsed.error}` }
+    await $.state.set(GOAL, { text: parsed.text, limits: parsed.limits, startedAt: await $.clock.now(), tokens: 0, step: 1, review: null })
+    $.ui.invalidate('ui.render')
+    // After a command the engine clears the box; fill it once that has happened.
+    void $.clock
+      .sleep(30)
+      .then(() => $.prompt.fill({ text: parsed.text }))
+      .catch(() => {})
+    return { text: `✦ goal set (${budgetLine({ ms: 0, tokens: 0 }, parsed.limits)}). Enter starts the first step.` }
   })
 
   on('command.run', { command: 'spark-agents' }, async ($) => {
@@ -667,7 +747,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const [phase = IDLE, modes = [], key, failure, review, sandbox, stat] = await Promise.all([
+    const [phase = IDLE, modes = [], key, failure, review, sandbox, stat, goal] = await Promise.all([
       read($, PHASE),
       read($, MODES),
       read($, KEY),
@@ -675,7 +755,9 @@ export const register: Register = (on, options) => {
       read($, REVIEW),
       read($, SANDBOX),
       read($, DIFFSTAT),
+      read($, GOAL),
     ])
+    const now = goal ? await $.clock.now() : 0
     const elements = $.ui.resolve(e)
     const { Box, Text, Button } = elements
     // Only the terminal surface draws images.
@@ -731,6 +813,17 @@ export const register: Register = (on, options) => {
             <Button key="revert" hotkey="2" label="2 revert" onPress={() => revertTurn($)} />
             <Text> </Text>
             <Button key="diff" hotkey="3" label="3 diff" onPress={() => void openDiff($)} />
+          </Box>
+        ) : null}
+        {goal ? (
+          <Box>
+            <Text color="#38E8FF">{`◎ goal: ${goal.text} · step ${goal.step} · ${budgetLine({ ms: now - goal.startedAt, tokens: goal.tokens }, goal.limits)} `}</Text>
+            {goal.review ? (
+              <Text dimColor>{goal.review.met ? `· Gemini thinks it's done: ${goal.review.why} ` : '· next step is in the box, Enter sends it '}</Text>
+            ) : null}
+            <Button key="goal-met" hotkey="6" label="6 goal met" onPress={() => void endGoal($, 'met')} />
+            <Text> </Text>
+            <Button key="goal-stop" hotkey="7" label="7 stop" onPress={() => void endGoal($, 'stopped')} />
           </Box>
         ) : null}
         {failure ? (

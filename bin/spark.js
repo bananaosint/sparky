@@ -14,6 +14,7 @@ import { frames, playIntro } from '../src/intro.js';
 import { loadConfig, saveConfig } from '../src/config.js';
 import { THEME_NAMES } from '../src/palettes.js';
 import { createSkin } from '../src/skin.js';
+import { translatePaste } from '../src/paste.js';
 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -24,7 +25,7 @@ const HELP = `spark: Claude Code with Gemini-cooked prompts
   spark [flags] [claude args]   start Claude Code in this folder
     --plain                     no banner, theme or spinner verbs
     --no-gemini                 send prompts as typed this session
-    --direct                    skip Spark's terminal layer, so Claude Code shows its crab again
+    --direct                    skip Spark's terminal layer (Claude Code's own mascot shows again)
     --no-anim                   show Sparky without the startup animation
     --                          pass everything after it to claude
   spark theme [name]            show or set the look: ultraviolet (default) or teal
@@ -59,7 +60,7 @@ const configuredTheme = () => {
 
 const assetPath = (name) => join(root, 'assets', name);
 
-// Runs claude in a pseudo-terminal so its crab can be redrawn as Sparky on the way
+// Runs claude in a pseudo-terminal so its mascot can be redrawn as Sparky on the way
 // to the screen. Its output waits while the intro plays; claude starts meanwhile.
 async function runSkinned(pty, args, env, theme, intro) {
   const child = pty.spawn('claude.exe', args, {
@@ -73,7 +74,11 @@ async function runSkinned(pty, args, env, theme, intro) {
   child.onData(createSkin((text) => (held ? held.push(text) : process.stdout.write(text)), { theme }));
   process.stdin.setRawMode(true);
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (data) => child.write(data));
+  // Keys go through in order; a Ctrl+V waits for the clipboard check before anything after it.
+  let keys = Promise.resolve();
+  process.stdin.on('data', (data) => {
+    keys = keys.then(async () => child.write(await translatePaste(data)));
+  });
   process.stdout.on('resize', () => child.resize(process.stdout.columns, process.stdout.rows));
   child.onExit(({ exitCode }) => {
     process.stdin.setRawMode(false);

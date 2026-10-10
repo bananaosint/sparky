@@ -83,3 +83,36 @@ test('a failed spark try turns the band red, and /spark-fix puts it in the promp
   expect(box()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
   expect(await band($)).not.toContain('npm test failed')
 })
+
+test('/goal sets a goal the band shows; /goal stop ends it', async ($, on) => {
+  session(on)
+  expect((await runCommand($, 'goal', 'all tests pass --time 30m --tokens 200k')).text).toBe(
+    '✦ goal set (0/30m · 0/200k tokens). Enter starts the first step.',
+  )
+  expect(await band($)).toContain('◎ goal: all tests pass · step 1 · 0/30m · 0/200k tokens')
+  expect((await runCommand($, 'goal', '')).text).toBe('✦ goal: all tests pass · step 1 · 0/30m · 0/200k tokens')
+  expect((await runCommand($, 'goal', 'stop')).text).toBe('✦ goal stopped')
+  expect(await band($)).not.toContain('◎ goal')
+})
+
+test('a turn that crosses the token limit ends the goal', async ($, on) => {
+  const { clock } = session(on)
+  const toasts: string[] = []
+  on('ui.toast', (_$: unknown, e: any) => {
+    toasts.push(String(e.text ?? JSON.stringify(e)))
+    return { value: undefined }
+  })
+  on('turn.complete', (_$: unknown, e: any) => ({ text: e.answer }))
+  await runCommand($, 'goal', 'ship it --tokens 1k')
+  await ($ as any).turn.complete({
+    answer: 'done',
+    durationMs: 10,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+    usage: { input_tokens: 600, output_tokens: 500, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' },
+  })
+  await clock.settle()
+  expect(toasts.some((t) => t.includes('goal ended: token limit reached'))).toBe(true)
+  expect(await band($)).not.toContain('◎ goal')
+})
