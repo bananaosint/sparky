@@ -6,7 +6,7 @@ import type { CallRequest } from '../hooks/council-providers'
 import { runCouncil } from '../hooks/council-run'
 
 // The mod's type contract has no timers; the test runner does.
-declare const setTimeout: (fn: (...args: unknown[]) => void, ms: number) => unknown
+declare const setTimeout: (fn: (...args: never[]) => void, ms: number) => unknown
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const brief = { objective: 'speed up the cache', context: [], constraints: [], criteria: [], verification: [] }
