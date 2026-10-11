@@ -149,3 +149,40 @@ test('clock reads m:ss, or h:mm:ss past an hour', () => {
   expect(clock(50_000)).toBe('0:50')
   expect(clock(3_725_000)).toBe('1:02:05')
 })
+
+const tasks = [
+  { id: 't1', title: 'Limiter', do: 'Add it', after: [], check: 'npm test -- limiter' },
+  { id: 't2', title: 'Message', do: 'Say when', after: ['t1'] },
+  { id: 't3', title: 'Docs', do: 'Write it up', after: ['t2'] },
+]
+const taskRecords: MissionRecord[] = [
+  { at: 10, kind: 'task', id: 't1', event: 'started', attempt: 1 },
+  { at: 20, kind: 'task', id: 't1', event: 'retry', attempt: 2, check: { name: 'task t1', status: 'fail', exit: 1, tail: 'not ok 1' } },
+  { at: 30, kind: 'task', id: 't1', event: 'done', attempt: 2, files: [{ path: 'src/auth.js', added: 9, removed: 1 }], check: { name: 'task t1', status: 'pass', exit: 0 } },
+  { at: 40, kind: 'task', id: 't2', event: 'started', attempt: 1 },
+  { at: 50, kind: 'task', id: 't2', event: 'failed', attempt: 2, note: "task t2's check failed twice", check: { name: 'task t2', status: 'timed-out' } },
+]
+
+test("a planned mission's report lists each task: its state, attempts, check and changed files, from Spark's records", () => {
+  const r = buildReport(done({ status: 'blocked', reason: "task t2's check failed twice", tasks }), [...records, ...taskRecords], { inRepo: true, endTree: T, now: 99_000 })
+  expect(r.tasks?.map((t) => [t.id, t.state, t.attempts])).toEqual([
+    ['t1', 'done', 2],
+    ['t2', 'failed', 2],
+    ['t3', 'not reached', 0],
+  ])
+  const section = reportSections(r).find((s) => s.heading === 'Tasks')!
+  expect(section.lines).toEqual([
+    { text: '✓ t1 Limiter · done · 2 attempts · check passed · 1 file changed', tone: 'ok' },
+    { text: "✗ t2 Message · failed · 2 attempts · check timed out · task t2's check failed twice", tone: 'fail' },
+    { text: '· t3 Docs · not reached', tone: 'warn' },
+  ])
+  expect(reportSections(buildReport(done(), records, { inRepo: true, endTree: T, now: 99_000 })).some((s) => s.heading === 'Tasks')).toBe(false)
+})
+
+test('task records become timeline rows', () => {
+  expect(describe(taskRecords[0]!)).toMatchObject({ tone: 'info', text: 'task t1 started' })
+  expect(describe(taskRecords[1]!)).toMatchObject({ tone: 'warn', text: 'task t1: check failed (exit 1), sent back (attempt 2)', detail: 'not ok 1' })
+  expect(describe(taskRecords[2]!)).toMatchObject({ tone: 'ok', text: 'task t1 done · check passed' })
+  expect(describe(taskRecords[4]!)).toMatchObject({ tone: 'fail', text: "task t2 failed: task t2's check failed twice" })
+  expect(describe({ at: 1, kind: 'task', id: 't9', event: 'done', attempt: 1, note: "no check: Claude's word" })).toMatchObject({ text: "task t9 done · no check: Claude's word" })
+})

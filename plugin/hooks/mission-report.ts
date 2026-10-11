@@ -2,7 +2,9 @@
 // account of the work is kept apart and labeled as unverified.
 import { numstat, pinSnapshot, treeOf } from './snapshot.ts'
 import type { Run } from './snapshot.ts'
-import { EDIT_TOOLS, SHELL_TOOLS } from './mission.ts'
+import { EDIT_TOOLS, FINAL, SHELL_TOOLS } from './mission.ts'
+import { taskStates } from './plan.ts'
+import type { Task, TaskState, TaskView } from './plan.ts'
 import type { Decision, GateRecord, Mission, MissionRecord } from './mission.ts'
 import { isCommandHow, verdict } from './verify.ts'
 import type { CheckResult, CheckStatus, Verdict } from './verify.ts'
@@ -22,6 +24,8 @@ export type Report = {
   time: { wallMs?: number; workedMs: number }
   cost: { usd?: number; tokens?: number }
   claude: string
+  // A planned mission's tasks, as Spark's task records left them.
+  tasks?: { id: string; title: string; after: string[]; state: TaskState; attempts: number; files?: FileStat[]; line: string }[]
   // Spark's own checks, from the last verification pass.
   proof?: { verdict: Verdict; at: number; again: boolean; logDir: string; checks: { name: string; status: CheckStatus; line: string; log?: string }[] }
 }
@@ -71,6 +75,16 @@ const outcome = (c: Partial<CheckResult>) => {
 }
 const proofLine = (c: CheckResult) => (c.command ? `${c.command} · ${outcome(c)} · ${clock(Number(c.ms) || 0)}` : outcome(c))
 
+const taskLine = (t: Task, v: TaskView) =>
+  [
+    `${t.id} ${t.title}`,
+    v.state,
+    ...(v.attempts > 1 ? [`${v.attempts} attempts`] : []),
+    ...(v.check ? [`check ${outcome(v.check)}`] : []),
+    ...(v.note ? [v.note] : []),
+    ...(v.files ? [`${v.files.length} file${v.files.length === 1 ? '' : 's'} changed`] : []),
+  ].join(' · ')
+
 function lastPass(records: readonly MissionRecord[]) {
   const i = records.map((r) => r.kind).lastIndexOf('verify')
   return i < 0 ? undefined : { start: records[i] as Of<'verify'>, checks: records.slice(i + 1).filter(is('check')) }
@@ -80,6 +94,7 @@ export function buildReport(m: Mission, records: readonly MissionRecord[], facts
   const state = testState(records, facts)
   const pass = lastPass(records)
   const v = pass && verdict(pass.checks, m.criteria)
+  const planned = m.tasks?.length ? taskStates(m.tasks, records, { over: FINAL.has(m.status) }) : undefined
   const byCriterion = new Map((pass?.checks ?? []).filter((c) => typeof c.criterion === 'number').map((c) => [c.criterion, c] as const))
   const tools = records.filter(is('tool'))
   const results = new Map(records.filter(is('tool-result')).map((r) => [r.id, r.ok] as const))
@@ -121,6 +136,14 @@ export function buildReport(m: Mission, records: readonly MissionRecord[], facts
     time: { ...(m.approvedAt === undefined ? {} : { wallMs: (m.endedAt ?? facts.now) - m.approvedAt }), workedMs: sums.workedMs },
     cost: { ...(sums.usd === undefined ? {} : { usd: sums.usd }), ...(sums.tokens === undefined ? {} : { tokens: sums.tokens }) },
     claude: records.filter(is('turn')).at(-1)?.text ?? '',
+    ...(planned
+      ? {
+          tasks: m.tasks!.map((t) => {
+            const view = planned[t.id]!
+            return { id: t.id, title: t.title, after: t.after, state: view.state, attempts: view.attempts, ...(view.files ? { files: view.files } : {}), line: taskLine(t, view) }
+          }),
+        }
+      : {}),
     ...(pass && v
       ? {
           proof: {
@@ -199,6 +222,15 @@ export function describe(r: MissionRecord): Row | undefined {
       }
     case 'verify':
       return { at: r.at, glyph: '◆', tone: 'info', text: r.again === true ? 'Spark checked again, on the working tree as it is now' : 'Spark ran its checks' }
+    case 'task': {
+      const id = `task ${s(r.id)}`
+      const c = r.check
+      const tail = c?.tail ? { detail: s(c.tail) } : {}
+      if (r.event === 'started') return { at: r.at, glyph: '▶', tone: 'info', text: `${id} started` }
+      if (r.event === 'retry') return { at: r.at, glyph: '↻', tone: 'warn', text: `${id}: check ${c ? outcome(c) : 'failed'}, sent back (attempt ${s(r.attempt)})`, ...tail }
+      if (r.event === 'done') return { at: r.at, glyph: '✓', tone: 'ok', text: `${id} done${c ? ` · check ${outcome(c)}` : ''}${r.note ? ` · ${s(r.note)}` : ''}` }
+      return { at: r.at, glyph: '✗', tone: 'fail', text: `${id} failed: ${s(r.note)}`, ...tail }
+    }
     case 'check':
       return {
         at: r.at,
@@ -260,6 +292,20 @@ export function reportSections(r: unknown): Section[] {
         tone: field(c, 'check') === 'needs you' ? ('warn' as const) : ('info' as const),
       })),
     },
+    ...(Array.isArray(field(r, 'tasks'))
+      ? [
+          {
+            heading: 'Tasks',
+            lines: list(field(r, 'tasks')).map((t) => {
+              const state = field(t, 'state')
+              return {
+                text: `${state === 'done' ? '✓' : state === 'failed' ? '✗' : '·'} ${text(field(t, 'line'))}`,
+                tone: state === 'done' ? ('ok' as const) : state === 'failed' ? ('fail' as const) : ('warn' as const),
+              }
+            }),
+          },
+        ]
+      : []),
     {
       heading: 'Changed files',
       lines: [
