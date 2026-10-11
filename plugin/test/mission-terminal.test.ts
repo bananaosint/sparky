@@ -209,6 +209,47 @@ test("a slow terminal check doesn't hold the mod's other work: /mission answers 
   expect(t.files('report.json')).toHaveLength(1)
 })
 
+const PLANNED = `Read it.\n\`\`\`mission\n${JSON.stringify({
+  title: 'Rate-limit login',
+  criteria: [{ text: 'sixth login gets 429', how: 'manual' }],
+  tasks: [
+    { id: 't1', title: 'Limiter', do: 'Add it', after: [], check: 'npm test -- limiter' },
+    { id: 't2', title: 'Message', do: 'Say when', after: ['t1'] },
+  ],
+})}\n\`\`\``
+
+test('a planned terminal mission drives its tasks: after a passing check the next task fills the prompt; the last one finishes it', async ($, on) => {
+  let limiter = 0
+  const t = terminal(on, { cmd: (line) => ({ exitCode: line === 'npm test -- limiter' && ++limiter > 1 ? 0 : 1, stdout: `run ${limiter}` }) })
+  await $.session.start({ cwd: 'C:\\app', surface: 'terminal', isInteractive: true })
+  await mission($, 'rate-limit the login route')
+  await t.settle()
+  await turnComplete($, PLANNED)
+  await t.settle()
+  expect(t.saved().tasks).toHaveLength(2)
+  await mission($, 'approve')
+  await t.settle()
+  expect(t.box()).toContain('Do only task t1 (Limiter) now: Add it')
+  await turnComplete($, 'Added the limiter.')
+  await t.settle()
+  await t.settle()
+  expect(t.box()).toMatch(/^\\Task t1's check failed \(exit 1\):/)
+  await turnComplete($, 'Fixed it.')
+  await t.settle()
+  await t.settle()
+  expect(t.ran).toEqual(['npm test -- limiter', 'npm test -- limiter'])
+  expect(t.box()).toMatch(/^\\Do only task t2 \(Message\) now: Say when/)
+  expect(t.saved().status).toBe('running')
+  await turnComplete($, 'Added the message.')
+  await t.settle()
+  await t.settle()
+  expect(t.saved()).toMatchObject({ status: 'finished', reason: 'every task is done' })
+  const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
+  expect(events.filter((e: any) => e.kind === 'task').map((e: any) => `${e.id} ${e.event}#${e.attempt}`)).toEqual(['t1 started#1', 't1 retry#2', 't1 done#2', 't2 started#1', 't2 done#1'])
+  const report = JSON.parse(t.files('report.json')[0]![1])
+  expect(report.tasks.map((x: any) => x.state)).toEqual(['done', 'done'])
+})
+
 test('a cancelled terminal mission is not checked', async ($, on) => {
   const t = terminal(on, { top: ['package.json'] })
   t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))

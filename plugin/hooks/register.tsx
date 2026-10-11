@@ -59,8 +59,10 @@ import type { Preview } from './gate'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
-import { fileDiffs, listSnapshots, pinSnapshot, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
+import { fileDiffs, listSnapshots, numstat, pinSnapshot, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
+import { afterCheck, nextTask, retryText, taskStates, taskText } from './plan'
+import type { TaskRecord } from './plan'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
 import { CHECK_RUNNER, CHECK_TIMED_OUT, changedScripts, configuredFor, planChecks } from './verify'
@@ -555,7 +557,8 @@ const CHECK_MS = 300_000
 
 // One planned check, through Spark's check runner (verify.ts): cmd gets the command verbatim,
 // and past the limit the whole tree ends. Output is redacted before it is kept.
-async function runCheck($: EngineInterface, root: string, id: string, check: PlannedCheck, n: number): Promise<CheckResult> {
+// `log`: the log's file name, under `dir` in the mission's folder (`checks` for a pass, `tasks`).
+async function runCheck($: EngineInterface, root: string, id: string, check: PlannedCheck, dir: string, log: string): Promise<CheckResult> {
   const base = { name: check.name, ...(check.criterion === undefined ? {} : { criterion: check.criterion }) }
   if (!check.command) return { ...base, status: 'not-run', reason: check.reason ?? '' }
   const tree = inRepo ? await treeNow(runner($)).catch(() => undefined) : undefined
@@ -564,8 +567,7 @@ async function runCheck($: EngineInterface, root: string, id: string, check: Pla
     const r = await $.process.run(['node', '-e', CHECK_RUNNER, '--', check.command, String(CHECK_MS)], { cwd: root, timeoutMs: CHECK_MS + 30_000 })
     const late = r.exitCode === 124 && r.stderr.includes(CHECK_TIMED_OUT)
     const text = redact(`${r.stdout}${r.stderr}`).text
-    const log = `${n}.log`
-    await $.fs.write(missionFile(root, id, `checks/${log}`), text)
+    await $.fs.write(missionFile(root, id, `${dir}/${log}`), text)
     const ms = (await $.clock.now()) - started
     return {
       ...base,
@@ -594,7 +596,9 @@ async function missionChecks($: EngineInterface, root: string, m: Mission): Prom
   return pass
 }
 
-async function planAndRun($: EngineInterface, root: string, m: Mission, pass: { at: number; checks: CheckResult[] }) {
+// The plan for `criteria` as the app makes it: the repo's files, the person's commands and trust,
+// the scripts changed since the start snapshot, and the gate.
+async function terminalPlan($: EngineInterface, root: string, m: Mission, criteria: Mission['criteria']) {
   const io = gateIo($)
   const files = await io.list(root)
   const packageJson = files.includes('package.json') ? await io.read(`${root}/package.json`) : undefined
@@ -604,21 +608,80 @@ async function planAndRun($: EngineInterface, root: string, m: Mission, pass: { 
     changed = changedScripts(before.exitCode === 0 ? before.stdout : '', packageJson ?? '')
   }
   const home = (await $.env.get('USERPROFILE')) ?? ''
-  const plan = planChecks({
+  return planChecks({
     files,
     packageJson,
     configured: configuredFor(await sparkConfig($), root),
-    criteria: m.criteria,
+    criteria,
     trusted: !(await $.env.get('SPARK_UNTRUSTED')),
     changedScripts: changed,
     classify: (command) => classify(command, 'powershell', { repo: root, home }),
   })
+}
+
+async function planAndRun($: EngineInterface, root: string, m: Mission, pass: { at: number; checks: CheckResult[] }) {
+  const plan = await terminalPlan($, root, m, m.criteria)
   await queued(() => appendEvents($, root, m.id, [{ at: pass.at, kind: 'verify', again: false }]))
   for (const [i, check] of plan.entries()) {
-    const result = await runCheck($, root, m.id, check, i + 1)
+    const result = await runCheck($, root, m.id, check, 'checks', `${i + 1}.log`)
     pass.checks.push(result)
     await queued(async () => appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'check', ...result }]))
   }
+}
+
+// ---------- terminal tasks: one turn each, as the app drives them (plan.ts decides) ----------
+
+const taskRecord = (at: number, id: string, event: TaskRecord['event'], attempt: number, more: Partial<TaskRecord> = {}): TaskRecord => ({ at, kind: 'task', id, event, attempt, ...more })
+
+// A task's turn ended: what it changed, its check, then a retry, the next task, or the end. Runs
+// outside the write queue, like the report; the next message goes into the prompt box.
+async function terminalTaskTurn($: EngineInterface, root: string, m: Mission) {
+  const tasks = m.tasks!
+  const records = await missionRecords($, { id: m.id, root })
+  const states = taskStates(tasks, records, { over: false })
+  const current = tasks.find((t) => states[t.id]!.state === 'running')
+  if (!current) return terminalFinish($, root, m)
+  const attempt = states[current.id]!.attempts
+  const started = records.filter((r): r is TaskRecord => r.kind === 'task' && r.id === current.id && r.event === 'started').at(-1)
+  const end = inRepo ? await pinSnapshot(runner($), `refs/spark/missions/${m.id}/task-${current.id}-${attempt}`, `mission ${m.id} task ${current.id}`).catch(() => undefined) : undefined
+  const files = started?.base && /^[0-9a-f]{40}$/.test(started.base) && end ? await numstat(runner($), started.base, end).catch(() => undefined) : undefined
+  let check: CheckResult | undefined
+  if (current.check) {
+    const planned = (await terminalPlan($, root, m, [{ text: current.title, how: current.check, by: 'claude' }])).find((p) => p.criterion === 0)
+    check = planned ? await runCheck($, root, m.id, { ...planned, name: `task ${current.id}` }, 'tasks', `${current.id}-${attempt}.log`) : undefined
+  }
+  const decision = afterCheck(current, attempt, check)
+  const now = await $.clock.now()
+  await queued(() =>
+    appendEvents($, root, m.id, [
+      taskRecord(now, current.id, decision.event, decision.event === 'retry' ? attempt + 1 : attempt, {
+        ...(files ? { files } : {}),
+        ...(check ? { check } : {}),
+        ...(decision.note ? { note: decision.note } : {}),
+      }),
+    ]),
+  )
+  // /mission cancel while the check ran: the result is kept, nothing more is sent.
+  const latest = await loadMission($, { id: m.id, root })
+  if (latest.status !== 'running') return
+  if (decision.event === 'retry') {
+    $.ui.toast(`✦ task ${current.id}'s check failed: Enter sends it back`)
+    return fillLater($, `\\${retryText(current, check!)}`)
+  }
+  const next = decision.event === 'done' ? nextTask(tasks, taskStates(tasks, await missionRecords($, { id: m.id, root }), { over: false })) : undefined
+  if (!next) return terminalFinish($, root, latest)
+  await queued(async () => appendEvents($, root, m.id, [taskRecord(await $.clock.now(), next.id, 'started', 1, end ? { base: end } : {})]))
+  $.ui.toast(`✦ task ${current.id} done: Enter sends task ${next.id}`)
+  fillLater($, `\\${taskText(next)}`)
+}
+
+// Every task done, or one failed for good: the mission ends and its report follows.
+async function terminalFinish($: EngineInterface, root: string, m: Mission) {
+  const states = taskStates(m.tasks!, await missionRecords($, { id: m.id, root }), { over: false })
+  const failed = m.tasks!.find((t) => states[t.id]!.state === 'failed')
+  const moved = move(m, failed ? 'blocked' : 'finished', failed ? `task ${failed.id}'s check failed twice` : 'every task is done', await $.clock.now())
+  await queued(() => saveMission($, root, moved.mission, [moved.record]))
+  await missionReport($, root, moved.mission)
 }
 
 // Runs outside the write queue, which the mod's other writes (gate records, tool calls) wait on:
@@ -650,7 +713,7 @@ async function missionAction($: EngineInterface, at: { id: string; root: string 
   const startSha = inRepo ? await pinSnapshot(runner($), `refs/spark/missions/${m.id}/start`, `mission ${m.id} start`).catch(() => undefined) : undefined
   const moved = move(m, 'running', `you approved ${criteriaCount(m.criteria.length)}`, now)
   const running: Mission = { ...moved.mission, approvedAt: now, ...(startSha ? { startSha } : {}) }
-  await saveMission($, at.root, running, [moved.record])
+  await saveMission($, at.root, running, [moved.record, ...(running.tasks?.length ? [taskRecord(now, running.tasks[0]!.id, 'started', 1, startSha ? { base: startSha } : {})] : [])])
   fillLater($, `\\${runText(running)}`)
   return '✦ approved: Enter sends the mission to Claude'
 }
@@ -702,6 +765,7 @@ async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: 
     await openPane($, MISSION_PANE, 'mission')
   }
   if (FINAL.has(done.mission.status)) void missionReport($, at.root, done.mission).catch(() => {})
+  else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length) void terminalTaskTurn($, at.root, done.mission).catch(() => {})
 }
 
 // ---------- /council in the terminal: the shared steps, with $.http and $.process as the I/O ----------
@@ -1484,7 +1548,9 @@ export const register: Register = (on, options) => {
     if (!at) return <Text dimColor>no mission</Text>
     const m = await loadMission($, at).catch(() => undefined)
     if (!m) return <Text color={ERROR}>the mission file is unreadable</Text>
-    const rows = (await missionRecords($, at)).map(describe).filter((r): r is Row => r !== undefined).slice(-30)
+    const records = await missionRecords($, at)
+    const rows = records.map(describe).filter((r): r is Row => r !== undefined).slice(-30)
+    const states = m.tasks?.length ? taskStates(m.tasks, records, { over: FINAL.has(m.status) }) : undefined
     const report = await $.fs
       .read(missionFile(at.root, at.id, 'report.json'))
       .then((t) => JSON.parse(t) as unknown)
@@ -1502,6 +1568,16 @@ export const register: Register = (on, options) => {
             <Text>{`${i + 1}. ${c.text} · ${c.how}`}</Text>
           ))}
         </Box>
+        {m.tasks && states ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>tasks · one at a time</Text>
+            {m.tasks.map((t) => {
+              const s = states[t.id]!
+              const tone = s.state === 'done' ? 'ok' : s.state === 'failed' ? 'fail' : s.state === 'running' ? 'warn' : 'info'
+              return <Text color={TONE[tone]}>{`${s.state === 'done' ? '✓' : s.state === 'failed' ? '✗' : s.state === 'running' ? '▶' : '·'} ${t.id} ${t.title} · ${s.state}${t.after.length ? ` · after ${t.after.join(', ')}` : ''}`}</Text>
+            })}
+          </Box>
+        ) : null}
         {report
           ? reportSections(report).map((s) => (
               <Box marginTop={1} flexDirection="column">

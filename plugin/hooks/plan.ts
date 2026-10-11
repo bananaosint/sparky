@@ -7,7 +7,8 @@ import type { CheckResult } from './verify.ts'
 export type Task = { id: string; title: string; do: string; after: string[]; check?: string }
 export type TaskEvent = 'started' | 'retry' | 'done' | 'failed'
 export type FileStat = { path: string; added: number; removed: number }
-export type TaskRecord = { at: number; kind: 'task'; id: string; event: TaskEvent; attempt: number; files?: FileStat[]; check?: CheckResult; note?: string }
+// `base`: the snapshot the task started from, for its changed files.
+export type TaskRecord = { at: number; kind: 'task'; id: string; event: TaskEvent; attempt: number; base?: string; files?: FileStat[]; check?: CheckResult; note?: string }
 export type TaskState = 'queued' | 'running' | 'done' | 'failed' | 'not reached'
 export type TaskView = { state: TaskState; attempts: number; files?: FileStat[]; check?: CheckResult; note?: string; from?: number; to?: number }
 
