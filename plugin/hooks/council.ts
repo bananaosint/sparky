@@ -186,19 +186,28 @@ export function pickCouncil(candidates: readonly Candidate[], mode: Mode, { brie
   const taken = new Set(proposers.map((s) => s.candidate))
   const pool = candidates
     .filter((c) => !taken.has(c) && (c.provider !== 'claude' || (m.judgeClaude as readonly string[]).includes(c.id)))
-    .filter((c) => c.provider === 'claude' || !families.has(c.family))
     .filter((c) => c.context !== undefined && c.context >= needed)
     .sort(scoredBy('intelligence'))
+  // Families no proposer used come first; a proposer's family (never the proposer) only fills
+  // seats nothing else can, and its reason says so.
+  const fresh = pool.filter((c) => c.provider === 'claude' || !families.has(c.family))
+  const fallback = pool.filter((c) => c.provider !== 'claude' && families.has(c.family))
   const judges: Seat[] = []
   const judgeFamilies = new Set<string>()
   const providers = new Set<Provider>()
-  while (judges.length < m.judges) {
-    const open = pool.filter((c) => !judgeFamilies.has(c.family) && !judges.some((j) => j.candidate === c))
-    const pick = open.find((c) => !providers.has(c.provider)) ?? open[0]
-    if (!pick) break
-    judgeFamilies.add(pick.family)
-    providers.add(pick.provider)
-    judges.push({ candidate: pick, reason: pick.provider === 'claude' ? `Claude judge (Light allows it); ${accessLabel(pick)}` : reasonFor(pick, 'intelligence') })
+  for (const [from, shared] of [
+    [fresh, false],
+    [fallback, true],
+  ] as const) {
+    while (judges.length < m.judges) {
+      const open = from.filter((c) => !judgeFamilies.has(c.family) && !judges.some((j) => j.candidate === c))
+      const pick = open.find((c) => !providers.has(c.provider)) ?? open[0]
+      if (!pick) break
+      judgeFamilies.add(pick.family)
+      providers.add(pick.provider)
+      const reason = pick.provider === 'claude' ? `Claude judge (Light allows it); ${accessLabel(pick)}` : reasonFor(pick, 'intelligence')
+      judges.push({ candidate: pick, reason: shared ? `${reason}; same family as a proposer (no other family left)` : reason })
+    }
   }
   judges.sort((a, b) => scoredBy('intelligence')(a.candidate, b.candidate))
 

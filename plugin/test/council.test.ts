@@ -119,3 +119,13 @@ test('estimates: paid by price, free at $0, Claude on your plan, Gemini not repo
   expect(estimate(CLAUDE_CANDIDATES[0]!, 40_000, 'proposer', 'light').label).toBe('on your Claude plan; reported after the run')
   expect(estimate({ ...scored('gemini-x', 1, 1), provider: 'gemini', access: 'gemini-key', price: undefined }, 4000, 'judge', 'light')).toEqual({ label: 'on your Gemini key; cost not reported' })
 })
+
+test('when only used families are left, a judge may share a proposer family (never a proposer) and says so', () => {
+  const gemini = (id: string, context: number): Candidate => ({ id, provider: 'gemini', name: id, family: id.startsWith('gemma') ? 'gemma' : 'gemini', access: 'gemini-key', openWeights: id.startsWith('gemma'), context })
+  const pool = [...CLAUDE_CANDIDATES, gemini('gemini-3.8-flash', 1_048_576), gemini('gemini-3.5-flash', 1_000_000), gemini('gemma-4-31b-it', 131_072)]
+  const panel = pickCouncil(pool, 'light', { briefChars: 4000 })
+  expect(panel.proposers.map((s) => s.candidate.id)).toEqual(['sonnet', 'gemini-3.8-flash', 'gemma-4-31b-it'])
+  expect(panel.judges.map((s) => s.candidate.id)).toEqual(['gemini-3.5-flash', 'opus'])
+  expect(panel.judges[0]!.reason).toContain('same family as a proposer')
+  expect(panel.empty).toEqual(['1 of 4 proposer seats'])
+})
