@@ -5,44 +5,27 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { classify } from '../staged/plugin/hooks/gate.ts';
 import { redact } from '../staged/plugin/hooks/redact.ts';
-import { planChecks } from '../staged/plugin/hooks/verify.ts';
+import { changedScripts as changed, configuredFor, planChecks } from '../staged/plugin/hooks/verify.ts';
 
 const LIMIT_MS = 5 * 60_000;
 const TAIL_LINES = 40;
 // A check that prints without end keeps only its last 2 MB.
 const KEEP_CHARS = 2_000_000;
 
-const normal = (path) => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-
-// Each script with the pre and post scripts npm runs around it.
-function scriptGroups(packageJson) {
-  try {
-    const s = JSON.parse(packageJson)?.scripts ?? {};
-    const names = Object.keys(s).filter((n) => !/^(pre|post)/.test(n) || !(n.replace(/^(pre|post)/, '') in s));
-    return new Map(names.map((n) => [n, JSON.stringify([s[`pre${n}`], s[n], s[`post${n}`]])]));
-  } catch {
-    return new Map();
-  }
-}
-
 // What planChecks needs, read from the repo top and Spark's config. Scripts are compared with the
 // start snapshot's package.json; one missing there counts as changed.
 export async function planFor({ cwd, mission, config, trusted, run }) {
   const files = readdirSync(cwd);
   const packageJson = files.includes('package.json') ? readFileSync(join(cwd, 'package.json'), 'utf8') : undefined;
-  const own = Object.entries(config.repos ?? {}).find(([path]) => normal(path) === normal(cwd))?.[1] ?? {};
-  const configured = Object.fromEntries(['test', 'typecheck', 'lint', 'build'].filter((k) => typeof own[k] === 'string').map((k) => [k, own[k]]));
   let changedScripts;
   if (run && mission.startSha) {
     const before = await run(['git', 'show', `${mission.startSha}:package.json`], { cwd });
-    const then = scriptGroups(before.exitCode === 0 ? before.stdout : '{}');
-    const now = scriptGroups(packageJson ?? '{}');
-    changedScripts = [...new Set([...then.keys(), ...now.keys()])].filter((n) => then.get(n) !== now.get(n));
+    changedScripts = changed(before.exitCode === 0 ? before.stdout : '', packageJson ?? '');
   }
   return planChecks({
     files,
     packageJson,
-    configured,
+    configured: configuredFor(config, cwd),
     criteria: mission.criteria,
     trusted,
     changedScripts,

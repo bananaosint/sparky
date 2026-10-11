@@ -34,6 +34,29 @@ function scripts(packageJson: string | undefined): Record<string, unknown> {
   }
 }
 
+const normal = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
+// The person's own commands for the repo at `top`, from Spark's config (`repos[<path>]`).
+export function configuredFor(config: unknown, top: string): { test?: string; typecheck?: string; lint?: string; build?: string } {
+  const repos = (config as { repos?: Record<string, Record<string, unknown>> } | undefined)?.repos ?? {}
+  const own = Object.entries(repos).find(([path]) => normal(path) === normal(top))?.[1] ?? {}
+  return Object.fromEntries(['test', 'typecheck', 'lint', 'build'].flatMap((k) => (typeof own[k] === 'string' ? [[k, own[k]]] : [])))
+}
+
+// Each script with the pre and post scripts npm runs around it.
+function scriptGroups(packageJson: string) {
+  const s = scripts(packageJson) as Record<string, unknown>
+  const names = Object.keys(s).filter((n) => !/^(pre|post)/.test(n) || !(n.replace(/^(pre|post)/, '') in s))
+  return new Map(names.map((n) => [n, JSON.stringify([s[`pre${n}`], s[n], s[`post${n}`]])]))
+}
+
+// The scripts that differ between two package.json texts; one missing from either counts.
+export function changedScripts(before: string, after: string): string[] {
+  const then = scriptGroups(before)
+  const now = scriptGroups(after)
+  return [...new Set([...then.keys(), ...now.keys()])].filter((n) => then.get(n) !== now.get(n))
+}
+
 // The test gate's choice of test command, as a command line.
 function testLine(files: readonly string[], packageJson: string | undefined) {
   const has = (name: string) => files.includes(name)

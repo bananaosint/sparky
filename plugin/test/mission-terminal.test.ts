@@ -8,8 +8,10 @@ const DRAFT = 'Read it.\n```mission\n{"title":"Rate-limit login","criteria":[{"t
 const key = (p: string) => String(p).replace(/\//g, '\\')
 
 // A session at C:/app with an in-memory disk, git that answers what snapshots ask, and a prompt box.
-function terminal(on: any) {
+// `top`: the names at the repo top; `cmd`: how a check's command line (through cmd) ends.
+function terminal(on: any, { top = [] as string[], cmd = (_line: string) => ({ exitCode: 0, stdout: '' }) } = {}) {
   const disk = new Map<string, string>()
+  const ran: string[] = []
   let box = ''
   mock.env(on, {})
   const clock = mock.clock(on)
@@ -30,11 +32,18 @@ function terminal(on: any) {
     return { value: undefined }
   })
   on('fs.read', (_$: unknown, e: any) => (disk.has(key(e.path)) ? { value: disk.get(key(e.path)) } : { deny: 'no such file' }))
-  on('fs.list', () => ({ value: [] }))
+  on('fs.list', () => ({ value: top.map((name) => ({ name })) }))
   on('fs.exists', (_$: unknown, e: any) => ({ value: disk.has(key(e.path)) }))
   on('process.run', (_$: unknown, e: any) => {
     const a: string[] = e.argv
     const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (a[0] === 'cmd') {
+      ran.push(a.slice(4).join(' '))
+      const r = cmd(a.slice(4).join(' '))
+      return out(r.stdout, r.exitCode)
+    }
+    // package.json at the start snapshot: as it is now, so its scripts read as unchanged.
+    if (a[1] === 'show') return disk.has(key('C:/app/package.json')) ? out(disk.get(key('C:/app/package.json'))!) : out('', 128)
     if (a.includes('--show-toplevel')) return out('C:/app\n')
     if (a.includes('--git-path')) return out(`C:/app/.git/${a.at(-1)}\n`)
     if (a.includes('write-tree')) return out(`${'f'.repeat(40)}\n`)
@@ -52,7 +61,7 @@ function terminal(on: any) {
     await clock.advance(50)
     await clock.settle()
   }
-  return { disk, box: () => box, saved, files, settle }
+  return { disk, ran, box: () => box, saved, files, settle }
 }
 
 const turnComplete = ($: Engine, answer: string) =>
@@ -126,6 +135,37 @@ test('parallel tool calls both reach the record', async ($, on) => {
   await t.settle()
   const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
   expect(events.filter((e: any) => e.kind === 'tool').map((e: any) => e.id).sort()).toEqual(['p1', 'p2'])
+})
+
+test("a terminal mission ends with Spark's own checks: the verdict, the proof and redacted logs", async ($, on) => {
+  const secret = `ghp_${'b'.repeat(36)}`
+  const t = terminal(on, { top: ['package.json'], cmd: (line) => (line === 'npm test' ? { exitCode: 0, stdout: `ok 1 lockout\ntoken=${secret}\n` } : { exitCode: 1, stdout: 'nope' }) })
+  t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
+  await runningMission($, t)
+  await turnComplete($, 'Changed auth.js.')
+  await t.settle()
+  expect(t.ran).toEqual(['npm test', 'npm test'])
+  const report = JSON.parse(t.files('report.json')[0]![1])
+  expect(report.status).toBe('Finished · Verified')
+  expect(report.proof.checks.map((c: any) => [c.name, c.status])).toEqual([
+    ['tests', 'pass'],
+    ['criterion 1', 'pass'],
+  ])
+  const log = t.files('checks\\1.log')[0]![1]
+  expect(log).toContain('ok 1 lockout')
+  expect(log).not.toContain(secret)
+  const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
+  expect(events.filter((e: any) => e.kind === 'verify' || e.kind === 'check').map((e: any) => e.kind)).toEqual(['verify', 'check', 'check'])
+})
+
+test('a cancelled terminal mission is not checked', async ($, on) => {
+  const t = terminal(on, { top: ['package.json'] })
+  t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
+  await runningMission($, t)
+  await mission($, 'cancel')
+  await t.settle()
+  expect(t.ran).toEqual([])
+  expect(JSON.parse(t.files('report.json')[0]![1]).proof).toBeUndefined()
 })
 
 test('a subagent during the draft is refused edits too', async ($, on) => {

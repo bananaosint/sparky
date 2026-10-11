@@ -63,6 +63,8 @@ import { fileDiffs, listSnapshots, pinSnapshot, restoreSnapshot, takeSnapshot, t
 import type { FileDiff, Run } from './snapshot'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
+import { changedScripts, configuredFor, planChecks } from './verify'
+import type { CheckResult, PlannedCheck } from './verify'
 
 const PHASE = { plugin: 'spark', key: 'phase' } as const
 const MODES = { plugin: 'spark', key: 'modes' } as const
@@ -549,8 +551,60 @@ async function saveMission($: EngineInterface, root: string, m: Mission, records
   $.ui.invalidate('ui.render')
 }
 
+const CHECK_MS = 300_000
+
+// One planned check through cmd, as the app runs it. Output is redacted before it is kept.
+async function runCheck($: EngineInterface, root: string, id: string, check: PlannedCheck, n: number): Promise<CheckResult> {
+  const base = { name: check.name, ...(check.criterion === undefined ? {} : { criterion: check.criterion }) }
+  if (!check.command) return { ...base, status: 'not-run', reason: check.reason ?? '' }
+  const tree = inRepo ? await treeNow(runner($)).catch(() => undefined) : undefined
+  const started = await $.clock.now()
+  try {
+    const r = await $.process.run(['cmd', '/d', '/s', '/c', check.command], { cwd: root, timeoutMs: CHECK_MS })
+    const text = redact(`${r.stdout}${r.stderr}`).text
+    const log = `${n}.log`
+    await $.fs.write(missionFile(root, id, `checks/${log}`), text)
+    const ms = (await $.clock.now()) - started
+    return { ...base, command: check.command, status: r.exitCode === 0 ? 'pass' : 'fail', exit: r.exitCode, ms, ...(tree ? { tree } : {}), tail: text.trimEnd().split('\n').slice(-40).join('\n'), log }
+  } catch (err) {
+    // $.process.run rejects both when the command can't start and when it is still running at the limit.
+    const ms = (await $.clock.now()) - started
+    return { ...base, command: check.command, ...(ms >= CHECK_MS - 1000 ? { status: 'timed-out' as const } : { status: 'fail' as const, reason: redact(message(err)).text }), ms }
+  }
+}
+
+// Spark's own checks before a terminal mission's report: the app's plan (verify.ts), one at a time.
+async function missionChecks($: EngineInterface, root: string, m: Mission) {
+  const io = gateIo($)
+  const files = await io.list(root)
+  const packageJson = files.includes('package.json') ? await io.read(`${root}/package.json`) : undefined
+  let changed: string[] | undefined
+  if (inRepo && m.startSha) {
+    const before = await io.run(['git', 'show', `${m.startSha}:package.json`], { cwd: root })
+    changed = changedScripts(before.exitCode === 0 ? before.stdout : '', packageJson ?? '')
+  }
+  const home = (await $.env.get('USERPROFILE')) ?? ''
+  const plan = planChecks({
+    files,
+    packageJson,
+    configured: configuredFor(await sparkConfig($), root),
+    criteria: m.criteria,
+    trusted: !(await $.env.get('SPARK_UNTRUSTED')),
+    changedScripts: changed,
+    classify: (command) => classify(command, 'powershell', { repo: root, home }),
+  })
+  await appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'verify', again: false }])
+  for (const [i, check] of plan.entries()) {
+    const result = await runCheck($, root, m.id, check, i + 1)
+    await appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'check', ...result }])
+  }
+}
+
 async function missionReport($: EngineInterface, root: string, m: Mission) {
   const { mission, facts } = await gitFacts(inRepo ? runner($) : undefined, m, await $.clock.now())
+  // A pass whose checks could not run still reads as "Not verified", and the toast says why.
+  if (mission.status === 'finished' || mission.status === 'blocked')
+    await missionChecks($, root, mission).catch((err) => $.ui.toast(`✦ Spark's checks could not run: ${message(err)}`))
   const report = buildReport(mission, await missionRecords($, { id: m.id, root }), facts)
   await $.fs.write(missionFile(root, m.id, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
   await saveMission($, root, mission)
