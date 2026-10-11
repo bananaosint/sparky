@@ -38,7 +38,7 @@ export async function openMissions({ cwd, write, notify, now, hex4, config = () 
     };
     const missions = createMissionRunner({ store: createStore(root), write, notify, run: git, verify, checkTask, now, hex4 });
     missions.recover();
-    return { missions, root };
+    return { missions, root, inRepo };
   } catch (err) {
     return { error: err.message, root: cwd };
   }

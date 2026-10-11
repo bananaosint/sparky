@@ -14,7 +14,8 @@ import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
 import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
-import { openMissions } from './lib/mission-open.js';
+import { gitIn, openMissions } from './lib/mission-open.js';
+import { createCheckpoints, restoreRefusal } from './lib/checkpoints.js';
 import { missionRequest } from './lib/mission-ipc.js';
 import { stopChecks } from './lib/verify-run.js';
 import { createCouncilIo } from './lib/council-io.js';
@@ -55,9 +56,18 @@ let alwaysAllow = new Set();
 let skillInfo = [];
 // Permission questions waiting on the window, by id.
 const pending = new Map();
+// Whether a turn is in flight, from a message written to Claude Code until its result: a
+// checkpoint restore waits for it.
+let turnOpen = false;
+function toClaude(line, child = claude) {
+  if (line.startsWith('{"type":"user"')) turnOpen = true;
+  child?.stdin.write(`${line}\n`);
+}
+// The open folder's checkpoints (lib/checkpoints.js), for the Changes view.
+let checkpoints;
 // Keeps Claude working for a time or token budget (lib/marathon.js); idle until /marathon starts one.
 const marathon = createMarathon({
-  write: (line) => claude?.stdin.write(`${line}\n`),
+  write: (line) => toClaude(line),
   notify: (message) => send('marathon', message),
   now: Date.now,
   top: () => (loadConfig().marathonTop === 'fable' ? 'fable' : 'opus'),
@@ -126,7 +136,7 @@ function account() {
 async function openFolderMissions() {
   const opened = await openMissions({
     cwd,
-    write: (line) => claude?.stdin.write(`${line}\n`),
+    write: (line) => toClaude(line),
     notify: (message) => send('mission', message),
     now: Date.now,
     hex4: () => randomBytes(2).toString('hex'),
@@ -135,6 +145,11 @@ async function openFolderMissions() {
   });
   missions = opened.missions;
   if (opened.error) send('mission', { kind: 'error', error: `missions are off in this folder: ${opened.error}` });
+  checkpoints = createCheckpoints({
+    root: opened.root,
+    run: opened.inRepo ? gitIn(opened.root) : undefined,
+    missions: () => (missions?.list() ?? []).filter((m) => !m.unreadable),
+  });
   // Claude one-shots in a council never inherit the Gemini key from the environment.
   const env = { ...process.env };
   delete env.SPARK_GEMINI_KEY;
@@ -186,6 +201,7 @@ function startBridge() {
 function stopClaude() {
   const child = claude;
   claude = undefined;
+  turnOpen = false;
   marathon.restarted();
   missions?.interrupted('Claude Code restarted');
   child?.kill();
@@ -239,6 +255,7 @@ function startClaude({ resume, keepBusy = false } = {}) {
         send('payer', payer({ apiKeySource: event.apiKeySource, account: account() }));
       }
       send('event', event);
+      if (event.kind === 'result') turnOpen = false;
       if (event.kind === 'tool' && EDIT_TOOLS.has(event.name)) turnEdited = true;
       const inMarathon = marathon.running();
       marathon.onEvent(event);
@@ -246,7 +263,7 @@ function startClaude({ resume, keepBusy = false } = {}) {
       if (event.kind === 'result' && reviewDue({ model: settings().model, fromUser, marathon: inMarathon, edited: turnEdited }, event)) {
         turnEdited = false;
         fromUser = false;
-        child.stdin.write(`${userMessage({ text: REVIEW_PASS })}\n`);
+        toClaude(userMessage({ text: REVIEW_PASS }), child);
         send('ultra', { kind: 'review' });
       }
     }
@@ -255,12 +272,14 @@ function startClaude({ resume, keepBusy = false } = {}) {
   child.on('error', (err) => {
     if (claude !== child) return;
     claude = undefined;
+    turnOpen = false;
     missions?.exited(undefined, err.message);
     send('exit', { error: `Could not start Claude Code (${err.message}). Install it with: irm https://claude.ai/install.ps1 | iex` });
   });
   child.on('exit', (code) => {
     if (claude !== child) return;
     claude = undefined;
+    turnOpen = false;
     marathon.end('Claude Code stopped', { restore: false });
     missions?.exited(code, errors.trim() || undefined);
     send('exit', { code, error: errors.trim() || undefined });
@@ -310,7 +329,7 @@ ipcMain.on('send-message', (_e, message) => {
   fromUser = !marathon.running();
   turnEdited = false;
   missions?.you(message.text ?? '');
-  claude.stdin.write(`${userMessage(marathon.outgoing(message))}\n`);
+  toClaude(userMessage(marathon.outgoing(message)));
 });
 
 ipcMain.on('marathon', (_e, request) => {
@@ -483,6 +502,21 @@ ipcMain.handle('council-mission', (_e, id) => {
   if (!plan) return { error: 'no folder is open' };
   if (plan.error) return plan;
   return routeMission({ action: 'from-plan', plan });
+});
+
+// The Changes view: Spark's checkpoints, what changed since one, and restoring it.
+const tried = async (work) => {
+  try {
+    return await work();
+  } catch (err) {
+    return { error: err.message };
+  }
+};
+ipcMain.handle('checkpoints', () => tried(async () => ({ list: await checkpoints.list() })));
+ipcMain.handle('checkpoint-changes', (_e, sha) => tried(() => checkpoints.changes(String(sha))));
+ipcMain.handle('checkpoint-restore', (_e, sha) => {
+  const refusal = restoreRefusal({ turnOpen, missionBusy: Boolean(missions?.busy()), marathon: marathon.running() });
+  return refusal ? { error: refusal } : tried(() => checkpoints.restore(String(sha)));
 });
 
 ipcMain.on('open-external', (_e, url) => /^https?:\/\//.test(url) && shell.openExternal(url));

@@ -7,6 +7,7 @@ import { doubleTab } from './lib/keys.js';
 import { voxelize, project, closeEyes } from './lib/voxel.js';
 import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
 import { createMissionsView } from './lib/missions-view.js';
+import { createChangesView } from './lib/changes-view.js';
 import { councilCard } from './lib/council-view.js';
 
 const $ = (id) => document.getElementById(id);
@@ -534,6 +535,7 @@ const missionsView = createMissionsView({
   markdown,
   onStart: (objective) => startMission(objective),
   onToggle(open) {
+    if (open && changesView.isOpen()) changesView.close();
     $('missions').hidden = !open;
     list.hidden = open;
     composer.hidden = open;
@@ -543,6 +545,21 @@ const missionsView = createMissionsView({
   },
 });
 $('missions-open').addEventListener('click', () => (missionsView.isOpen() ? missionsView.close() : missionsView.open(activeMission?.id)));
+
+const changesView = createChangesView({
+  spark,
+  el,
+  onToggle(open) {
+    if (open && missionsView.isOpen()) missionsView.close();
+    $('changes').hidden = !open;
+    list.hidden = open;
+    composer.hidden = open;
+    $('changes-open').classList.toggle('on', open);
+    $('changes-open').setAttribute('aria-pressed', String(open));
+    if (!open) input.focus();
+  },
+});
+$('changes-open').addEventListener('click', () => (changesView.isOpen() ? changesView.close() : changesView.open()));
 
 async function startMission(objective) {
   if (busy) return note('Sparky is still working: wait, or press ■ to stop.');
