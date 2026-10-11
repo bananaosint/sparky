@@ -21,6 +21,8 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
   const objective = document.getElementById('mission-objective');
   let selected = null;
   let timeline = null;
+  // Missions whose checks are running: from main's 'verifying' until their report.
+  const checking = new Set();
 
   const pill = (status) => el('span', `pill ${status}`, status);
 
@@ -71,6 +73,12 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
     };
     if (m.status === 'paused' || m.status === 'interrupted') actions.append(button('Resume', 'yes', 'resume'));
     if (!OVER.has(m.status)) actions.append(button('Cancel', 'no', 'cancel'));
+    if (checking.has(m.id)) status.append(el('span', 'reason', 'Spark is running its checks…'));
+    else if (OVER.has(m.status)) {
+      const again = button('Check again', 'ghost', 'check-again');
+      again.title = "Run Spark's checks again, on the working tree as it is now";
+      actions.append(again);
+    }
     const back = el('button', 'ghost', 'Back to chat');
     back.type = 'button';
     back.addEventListener('click', () => onToggle(false));
@@ -162,7 +170,12 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
     addRow(id, row) {
       if (!root.hidden && id === selected && timeline) timeline.append(rowNode(row));
     },
+    verifying(id) {
+      checking.add(id);
+      if (!root.hidden && id === selected) show(id);
+    },
     showReport(id) {
+      checking.delete(id);
       if (!root.hidden && id === selected) show(id);
     },
     tick() {

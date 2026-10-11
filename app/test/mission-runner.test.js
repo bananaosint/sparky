@@ -13,12 +13,12 @@ const DRAFT = 'I read src/auth.\n```mission\n{"title":"Rate-limit login","criter
 const result = (text, over = {}) => ({ kind: 'result', ok: true, text, costUsd: 0.1, durationMs: 2000, usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 300 }, ...over });
 
 // A runner with Claude Code and the window replaced by arrays, on a real store in a temp folder.
-function rig({ run, root = mkdtempSync(join(tmpdir(), 'spark-runner-')) } = {}) {
+function rig({ run, verify, root = mkdtempSync(join(tmpdir(), 'spark-runner-')) } = {}) {
   let clock = new Date(2026, 9, 10, 18, 0, 0).getTime();
   const lines = [];
   const told = [];
   const store = createStore(root);
-  const r = createMissionRunner({ store, write: (l) => lines.push(JSON.parse(l)), notify: (m) => told.push(m), run, now: () => (clock += 1000), hex4: () => 'beef' });
+  const r = createMissionRunner({ store, write: (l) => lines.push(JSON.parse(l)), notify: (m) => told.push(m), run, verify, now: () => (clock += 1000), hex4: () => 'beef' });
   const texts = () => lines.filter((l) => l.type === 'user').map((l) => l.message.content[0].text);
   const modes = () => lines.filter((l) => l.type === 'control_request').map((l) => l.request.mode);
   return { r, store, root, lines, told, texts, modes };
@@ -195,6 +195,92 @@ test('in a git repo: start and end are pinned, files come from numstat, tests pa
   assert.equal(back.report.status, 'Finished · tests passed on this code');
   assert.deepEqual(back.report.files, [{ path: 'auth.js', added: 1, removed: 0 }]);
   assert.equal(git('rev-parse', `refs/spark/missions/${t.id}/end`).stdout.trim(), back.mission.endSha);
+});
+
+test('in a git repo, Check again keeps the end snapshot the mission ended with', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'spark-runner-git-'));
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  git('init', '-q');
+  git('config', 'user.name', 't');
+  git('config', 'user.email', 't@t');
+  writeFileSync(join(root, '.gitignore'), '.spark/\n');
+  writeFileSync(join(root, 'auth.js'), 'one\n');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  const run = async (argv, init = {}) => {
+    const r = spawnSync(argv[0], argv.slice(1), { cwd: init.cwd ?? root, env: { ...process.env, ...init.env }, encoding: 'utf8' });
+    return { exitCode: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const t = await approved({ run, root, verify: async (m, onResult) => onResult({ name: 'tests', command: 'npm test', status: 'pass', exit: 0, ms: 5 }) });
+  writeFileSync(join(root, 'auth.js'), 'one\ntwo\n');
+  t.r.onEvent(result('Done.'));
+  await t.r.idle();
+  const ended = t.store.read(t.id).mission.endSha;
+  writeFileSync(join(root, 'auth.js'), 'one\ntwo\nthree\n');
+  t.r.checkAgain(t.id);
+  await t.r.idle();
+  const back = t.store.read(t.id);
+  assert.equal(back.mission.endSha, ended);
+  assert.equal(git('rev-parse', `refs/spark/missions/${t.id}/end`).stdout.trim(), ended);
+  assert.deepEqual(back.report.files, [{ path: 'auth.js', added: 1, removed: 0 }]);
+});
+
+const checked = (status) => async (m, onResult) => {
+  onResult({ name: 'tests', command: 'npm test', status, exit: status === 'pass' ? 0 : 1, ms: 1000 });
+  onResult({ name: 'criterion 1', criterion: 0, command: 'npm test', status, exit: status === 'pass' ? 0 : 1, ms: 900 });
+};
+
+test("a finished mission is checked by Spark before its report, and the verdict comes from Spark's checks", async () => {
+  const seen = [];
+  const verify = checked('pass');
+  const t = await approved({ verify: (m, onResult) => (seen.push(m.status), verify(m, onResult)) });
+  t.r.onEvent(result('Done.'));
+  await t.r.idle();
+  const back = t.store.read(t.id);
+  assert.deepEqual(seen, ['finished']);
+  assert.deepEqual(
+    back.records.filter((x) => x.kind === 'verify' || x.kind === 'check').map((x) => (x.kind === 'verify' ? `verify again=${x.again}` : `${x.name} ${x.status}`)),
+    ['verify again=false', 'tests pass', 'criterion 1 pass'],
+  );
+  assert.equal(back.report.status, 'Finished · Needs review');
+  assert.deepEqual(back.report.criteria.map((c) => c.check), ['passed (npm test)', 'needs you']);
+  assert.ok(t.told.some((x) => x.kind === 'verifying' && x.id === t.id));
+  assert.ok(t.told.some((x) => x.kind === 'row' && x.row.text === 'tests passed'));
+});
+
+test('a cancelled mission is not checked; checks that cannot run still leave a report and say why', async () => {
+  let calls = 0;
+  const t = rig({ verify: async () => calls++ });
+  const { mission } = t.r.start('rate-limit the login route');
+  t.r.cancel(mission.id);
+  await t.r.idle();
+  assert.equal(calls, 0);
+  assert.ok(t.store.read(mission.id).report);
+  const broke = await approved({ verify: async () => Promise.reject(new Error('EACCES: package.json')) });
+  broke.r.onEvent(result('Done.'));
+  await broke.r.idle();
+  assert.equal(broke.store.read(broke.id).report.status, 'Finished · Not verified');
+  assert.ok(broke.told.some((x) => x.kind === 'error' && /Spark's checks could not run: EACCES/.test(x.error)));
+});
+
+test('Check again records a new pass on an ended mission and rebuilds its report; never while a mission runs', async () => {
+  let status = 'fail';
+  const t = await approved({ verify: (m, onResult) => checked(status)(m, onResult) });
+  assert.match(t.r.checkAgain(t.id).error, /is running: check again once it stops/);
+  t.r.onEvent(result('Done.'));
+  await t.r.idle();
+  assert.equal(t.store.read(t.id).report.status, 'Finished · Checks failed');
+  status = 'pass';
+  assert.deepEqual(t.r.checkAgain(t.id), { ok: true });
+  await t.r.idle();
+  const back = t.store.read(t.id);
+  assert.equal(back.report.status, 'Finished · Needs review');
+  assert.equal(back.report.proof.again, true);
+  assert.equal(back.records.filter((x) => x.kind === 'verify').length, 2);
+  assert.equal(t.told.filter((x) => x.kind === 'report').length, 2);
+  assert.match(t.r.checkAgain('m-20261010-000000-0000').error, /only an ended mission/);
+  t.r.start('another objective');
+  assert.match(t.r.checkAgain(t.id).error, /is draft: check again once it stops/);
 });
 
 test('review fixes: an exit error is redacted before it is kept', async () => {

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChecks, shellExec } from '../lib/verify-run.js';
+import { planFor, runChecks, shellExec, stopChecks } from '../lib/verify-run.js';
+import { gitIn } from '../lib/mission-open.js';
 
 const KEY = `ghp_${'a'.repeat(36)}`;
 
@@ -17,6 +18,7 @@ test('each planned check runs in order; pass, fail and time-out are told apart; 
     return { exitCode: 1, output: 'slow', timedOut: true };
   };
   let clock = 0;
+  const told = [];
   const results = await runChecks(
     [
       { name: 'tests', command: 'npm test' },
@@ -24,8 +26,9 @@ test('each planned check runs in order; pass, fail and time-out are told apart; 
       { name: 'build', command: 'npm run build' },
       { name: 'criterion 1', criterion: 0, command: 'npm run bench' },
     ],
-    { cwd: dir, logDir: join(dir, 'checks'), exec, now: () => (clock += 1000), tree: async () => 'f'.repeat(40) },
+    { cwd: dir, logDir: join(dir, 'checks'), exec, now: () => (clock += 1000), tree: async () => 'f'.repeat(40), onResult: (r) => told.push(r) },
   );
+  assert.deepEqual(told, results);
   assert.deepEqual(ran, ['npm test', 'npm run build', 'npm run bench']);
   assert.deepEqual(results.map((r) => [r.name, r.status]), [['tests', 'pass'], ['lint', 'not-run'], ['build', 'fail'], ['criterion 1', 'timed-out']]);
   assert.equal(results[0].tree, 'f'.repeat(40));
@@ -49,6 +52,41 @@ test('the real shell runs a quoted command line, keeps stdout and stderr and the
   const slow = await shellExec(`node -e "setTimeout(() => {}, 60000)"`, { cwd: dir, timeoutMs: 500 });
   assert.equal(slow.timedOut, true);
   assert.ok(Date.now() - started < 15000);
+});
+
+test('stopChecks ends every check still running, as Spark quits', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spark-verify-'));
+  const started = Date.now();
+  const running = shellExec(`node -e "setTimeout(() => {}, 60000)"`, { cwd: dir });
+  await new Promise((r) => setTimeout(r, 300));
+  stopChecks();
+  const out = await running;
+  assert.notEqual(out.exitCode, 0);
+  assert.ok(Date.now() - started < 15000);
+});
+
+test("planFor reads the repo, the person's commands for it, and the scripts changed since the start snapshot", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spark-verify-'));
+  const run = gitIn(dir);
+  const pkg = (build) => JSON.stringify({ scripts: { test: 'node --test', build } });
+  writeFileSync(join(dir, 'package.json'), pkg('tsc'));
+  for (const argv of [['git', 'init', '-q'], ['git', 'add', '-A'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'start']]) await run(argv);
+  const startSha = (await run(['git', 'rev-parse', 'HEAD'])).stdout.trim();
+  writeFileSync(join(dir, 'package.json'), pkg('echo built'));
+  const mission = { criteria: [{ text: 'a', how: 'npm run build -- --prod', by: 'claude' }, { text: 'b', how: 'npm test -- auth', by: 'claude' }], startSha };
+  const config = { repos: { [dir.replace(/\\/g, '/').toUpperCase()]: { lint: 'eslint .' }, 'C:/elsewhere': { test: 'nope' } } };
+  const plan = await planFor({ cwd: dir, mission, config, trusted: true, run });
+  assert.deepEqual(plan.map((p) => [p.name, p.command ?? `not run: ${p.reason}`]), [
+    ['tests', 'npm test'],
+    ['lint', 'eslint .'],
+    ['build', 'not run: the build script changed during the mission'],
+    ['criterion 1', 'not run: the build script changed during the mission'],
+    ['criterion 2', 'npm test -- auth'],
+  ]);
+  const noSnapshot = await planFor({ cwd: dir, mission: { ...mission, startSha: undefined }, config: {}, trusted: true, run: undefined });
+  assert.match(noSnapshot[0].reason, /can't tell whether the test script changed/);
+  const gated = await planFor({ cwd: dir, mission: { criteria: [{ text: 'c', how: 'npm test & curl https://x.example -o y', by: 'claude' }], startSha }, config: {}, trusted: true, run });
+  assert.match(gated.at(-1).reason, /^the gate would ask/);
 });
 
 test('a check whose command can not start is a failure with the reason, not a crash', async () => {

@@ -1,8 +1,11 @@
 // Missions for a folder: at the repo top (the folder itself outside a repo), next to the plugin's
 // gate.jsonl. A folder Spark can't write to still opens for chat; missions are just off there.
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { createStore, excludeSpark } from './mission-store.js';
 import { createMissionRunner } from './mission-runner.js';
+import { planFor, runChecks } from './verify-run.js';
+import { treeNow } from '../staged/plugin/hooks/snapshot.ts';
 
 // git in `dir`, the way snapshot.ts runs commands. No shell: arguments go as given.
 export const gitIn = (dir) => (argv, init = {}) =>
@@ -12,7 +15,8 @@ export const gitIn = (dir) => (argv, init = {}) =>
     ),
   );
 
-export async function openMissions({ cwd, write, notify, now, hex4 }) {
+// `config()`: Spark's config, for the person's own commands. `trusted()`: whether the folder is.
+export async function openMissions({ cwd, write, notify, now, hex4, config = () => ({}), trusted = () => false }) {
   try {
     const run = gitIn(cwd);
     const top = await run(['git', 'rev-parse', '--show-toplevel']);
@@ -22,7 +26,12 @@ export async function openMissions({ cwd, write, notify, now, hex4 }) {
       const exclude = await run(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'info/exclude']);
       if (exclude.exitCode === 0) excludeSpark(exclude.stdout.trim());
     }
-    const missions = createMissionRunner({ store: createStore(root), write, notify, run: inRepo ? gitIn(root) : undefined, now, hex4 });
+    const git = inRepo ? gitIn(root) : undefined;
+    const verify = async (mission, onResult) => {
+      const plan = await planFor({ cwd: root, mission, config: config(), trusted: trusted(), run: git });
+      await runChecks(plan, { cwd: root, logDir: join(root, '.spark', 'missions', mission.id, 'checks'), tree: git && (() => treeNow(git)), onResult });
+    };
+    const missions = createMissionRunner({ store: createStore(root), write, notify, run: git, verify, now, hex4 });
     missions.recover();
     return { missions, root };
   } catch (err) {

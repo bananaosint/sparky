@@ -303,11 +303,12 @@ export function reportSections(r: unknown): Section[] {
   ]
 }
 
-// The git half of a report: the end snapshot, what changed since the start, and the end tree.
+// The git half of a report: the end snapshot, what changed since the start, and the end tree. A
+// report built again (Check again) keeps the end snapshot the mission ended with.
 export async function gitFacts(run: Run | undefined, m: Mission, now: number): Promise<{ mission: Mission; facts: Facts }> {
   if (!run) return { mission: m, facts: { inRepo: false, now } }
   try {
-    const endSha = await pinSnapshot(run, `refs/spark/missions/${m.id}/end`, `mission ${m.id} end`)
+    const endSha = m.endSha ?? (await pinSnapshot(run, `refs/spark/missions/${m.id}/end`, `mission ${m.id} end`))
     const files = m.startSha ? await numstat(run, m.startSha, endSha) : undefined
     const endTree = await treeOf(run, endSha)
     return { mission: { ...m, endSha }, facts: { inRepo: true, now, endTree, ...(files ? { files } : {}) } }

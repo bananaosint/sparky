@@ -30,8 +30,9 @@ const PLAN = 'mission-plan';
 
 // `store`: lib/mission-store.js for the folder. `write`: one line for Claude Code's stdin.
 // `notify`: one message for the window. `run`: git in the repo (snapshot.ts's Run), or undefined
-// outside one. `now`: the clock in ms. `hex4`: four random hex digits for ids.
-export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
+// outside one. `verify(mission, onResult)`: Spark's own checks (lib/verify-run.js), each result
+// handed to onResult as it finishes. `now`: the clock in ms. `hex4`: four random hex digits for ids.
+export function createMissionRunner({ store, write, notify, run, verify, now, hex4 }) {
   // The mission this window runs, until it ends or the window moves on.
   let active = null;
   // Reports wait on git; they run one after another so records stay in order.
@@ -58,16 +59,26 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
     return commit({ ...moved.mission, ...more }, [moved.record]);
   }
 
-  async function report(mission) {
+  // A pass whose checks could not run is still a pass: it reads as "Not verified", and says why.
+  async function checks(mission, again) {
+    record(mission, [{ at: now(), kind: 'verify', again }]);
+    notify({ kind: 'verifying', id: mission.id, again });
+    await verify(mission, (result) => record(mission, [{ at: now(), kind: 'check', ...result }])).catch((err) =>
+      notify({ kind: 'error', id: mission.id, error: `Spark's checks could not run: ${err.message}` }),
+    );
+  }
+
+  async function report(mission, { again = false } = {}) {
     const { mission: ended, facts } = await gitFacts(run, mission, now());
     store.save(ended);
+    if (verify && (again || ended.status === 'finished' || ended.status === 'blocked')) await checks(ended, again);
     const built = buildReport(ended, store.read(ended.id).records, facts);
     store.saveReport(ended.id, built);
     notify({ kind: 'report', id: ended.id, mission: ended, sections: reportSections(built) });
   }
 
-  function later(mission) {
-    queue = queue.then(() => report(mission)).catch((err) => notify({ kind: 'error', id: mission.id, error: err.message }));
+  function later(mission, options) {
+    queue = queue.then(() => report(mission, options)).catch((err) => notify({ kind: 'error', id: mission.id, error: err.message }));
   }
 
   function draft(objective) {
@@ -212,6 +223,16 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
           step(m, 'interrupted', 'Spark closed while it ran');
         } catch {}
       }
+    },
+
+    // The checks again on the working tree as it is now. Not while a mission runs: its edits would
+    // race the checks.
+    checkAgain(id) {
+      if (active && LIVE.has(active.status)) return { error: `mission "${active.title}" is ${active.status}: check again once it stops` };
+      const m = store.read(id)?.mission;
+      if (!verify || !m || !FINAL.has(m.status)) return { error: 'only an ended mission is checked again' };
+      later(m, { again: true });
+      return { ok: true };
     },
 
     list: () => store.list(),

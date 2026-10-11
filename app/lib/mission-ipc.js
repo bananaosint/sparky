@@ -25,5 +25,6 @@ export async function missionRequest(request, { missions, model, marathonRunning
     notUser();
     return missions.resume(id, restart);
   }
+  if (action === 'check-again') return missions.checkAgain(id);
   return { error: 'unknown mission action' };
 }

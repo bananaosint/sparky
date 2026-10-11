@@ -16,6 +16,7 @@ import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
 import { openMissions } from './lib/mission-open.js';
 import { missionRequest } from './lib/mission-ipc.js';
+import { stopChecks } from './lib/verify-run.js';
 import { createCouncilIo } from './lib/council-io.js';
 import { createCouncils } from './lib/council-session.js';
 import { cookPrompt, quickAnswer } from './lib/cook.js';
@@ -129,6 +130,8 @@ async function openFolderMissions() {
     notify: (message) => send('mission', message),
     now: Date.now,
     hex4: () => randomBytes(2).toString('hex'),
+    config: loadConfig,
+    trusted: () => folderMode === 'trusted',
   });
   missions = opened.missions;
   if (opened.error) send('mission', { kind: 'error', error: `missions are off in this folder: ${opened.error}` });
@@ -509,3 +512,4 @@ app.whenReady().then(() => {
   win.on('closed', stopClaude);
 });
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', stopChecks);

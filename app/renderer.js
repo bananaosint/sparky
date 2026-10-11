@@ -644,9 +644,14 @@ spark.on('mission', (m) => {
     setBusy(false);
     append(criteriaCard(m.mission));
   }
+  if (m.kind === 'verifying') {
+    append(el('div', 'result', `◆ mission: Spark is running its checks${m.again ? ' again' : ''}…`));
+    missionsView.verifying(m.id);
+  }
   if (m.kind === 'report') {
-    const status = m.sections[0]?.lines[0]?.text || m.mission.status;
-    const line = el('div', m.mission.status === 'finished' ? 'result' : 'result failed', `◆ mission ${status} · `);
+    const first = m.sections[0]?.lines[0];
+    const status = first?.text || m.mission.status;
+    const line = el('div', m.mission.status === 'finished' && first?.tone !== 'fail' ? 'result' : 'result failed', `◆ mission ${status} · `);
     const open = el('button', 'link', 'open the report');
     open.type = 'button';
     open.addEventListener('click', () => missionsView.open(m.id));
