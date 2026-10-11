@@ -63,7 +63,7 @@ import { fileDiffs, listSnapshots, pinSnapshot, restoreSnapshot, takeSnapshot, t
 import type { FileDiff, Run } from './snapshot'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
-import { changedScripts, configuredFor, planChecks } from './verify'
+import { CHECK_RUNNER, CHECK_TIMED_OUT, changedScripts, configuredFor, planChecks } from './verify'
 import type { CheckResult, PlannedCheck } from './verify'
 
 const PHASE = { plugin: 'spark', key: 'phase' } as const
@@ -553,28 +553,48 @@ async function saveMission($: EngineInterface, root: string, m: Mission, records
 
 const CHECK_MS = 300_000
 
-// One planned check through cmd, as the app runs it. Output is redacted before it is kept.
+// One planned check, through Spark's check runner (verify.ts): cmd gets the command verbatim,
+// and past the limit the whole tree ends. Output is redacted before it is kept.
 async function runCheck($: EngineInterface, root: string, id: string, check: PlannedCheck, n: number): Promise<CheckResult> {
   const base = { name: check.name, ...(check.criterion === undefined ? {} : { criterion: check.criterion }) }
   if (!check.command) return { ...base, status: 'not-run', reason: check.reason ?? '' }
   const tree = inRepo ? await treeNow(runner($)).catch(() => undefined) : undefined
   const started = await $.clock.now()
   try {
-    const r = await $.process.run(['cmd', '/d', '/s', '/c', check.command], { cwd: root, timeoutMs: CHECK_MS })
+    const r = await $.process.run(['node', '-e', CHECK_RUNNER, '--', check.command, String(CHECK_MS)], { cwd: root, timeoutMs: CHECK_MS + 30_000 })
+    const late = r.exitCode === 124 && r.stderr.includes(CHECK_TIMED_OUT)
     const text = redact(`${r.stdout}${r.stderr}`).text
     const log = `${n}.log`
     await $.fs.write(missionFile(root, id, `checks/${log}`), text)
     const ms = (await $.clock.now()) - started
-    return { ...base, command: check.command, status: r.exitCode === 0 ? 'pass' : 'fail', exit: r.exitCode, ms, ...(tree ? { tree } : {}), tail: text.trimEnd().split('\n').slice(-40).join('\n'), log }
+    return {
+      ...base,
+      command: check.command,
+      status: late ? 'timed-out' : r.exitCode === 0 ? 'pass' : 'fail',
+      exit: r.exitCode,
+      ms,
+      ...(tree ? { tree } : {}),
+      tail: text.trimEnd().split('\n').slice(-40).join('\n'),
+      log,
+    }
   } catch (err) {
-    // $.process.run rejects both when the command can't start and when it is still running at the limit.
-    const ms = (await $.clock.now()) - started
-    return { ...base, command: check.command, ...(ms >= CHECK_MS - 1000 ? { status: 'timed-out' as const } : { status: 'fail' as const, reason: redact(message(err)).text }), ms }
+    return { ...base, command: check.command, status: 'fail', reason: redact(message(err)).text, ms: (await $.clock.now()) - started }
   }
 }
 
-// Spark's own checks before a terminal mission's report: the app's plan (verify.ts), one at a time.
-async function missionChecks($: EngineInterface, root: string, m: Mission) {
+// Spark's own checks before a terminal mission's report: the app's plan (verify.ts), one at a
+// time. The results come back from memory for the report; only the records go to disk, queued.
+async function missionChecks($: EngineInterface, root: string, m: Mission): Promise<{ at: number; again: boolean; checks: CheckResult[] }> {
+  const pass = { at: await $.clock.now(), again: false, checks: [] as CheckResult[] }
+  try {
+    await planAndRun($, root, m, pass)
+  } catch (err) {
+    $.ui.toast(`✦ Spark's checks could not run: ${message(err)}`)
+  }
+  return pass
+}
+
+async function planAndRun($: EngineInterface, root: string, m: Mission, pass: { at: number; checks: CheckResult[] }) {
   const io = gateIo($)
   const files = await io.list(root)
   const packageJson = files.includes('package.json') ? await io.read(`${root}/package.json`) : undefined
@@ -593,21 +613,25 @@ async function missionChecks($: EngineInterface, root: string, m: Mission) {
     changedScripts: changed,
     classify: (command) => classify(command, 'powershell', { repo: root, home }),
   })
-  await appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'verify', again: false }])
+  await queued(() => appendEvents($, root, m.id, [{ at: pass.at, kind: 'verify', again: false }]))
   for (const [i, check] of plan.entries()) {
     const result = await runCheck($, root, m.id, check, i + 1)
-    await appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'check', ...result }])
+    pass.checks.push(result)
+    await queued(async () => appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'check', ...result }]))
   }
 }
 
+// Runs outside the write queue, which the mod's other writes (gate records, tool calls) wait on:
+// a suite can take minutes. Only its writes are queued. Callers inside the queue don't await it.
 async function missionReport($: EngineInterface, root: string, m: Mission) {
   const { mission, facts } = await gitFacts(inRepo ? runner($) : undefined, m, await $.clock.now())
   // A pass whose checks could not run still reads as "Not verified", and the toast says why.
-  if (mission.status === 'finished' || mission.status === 'blocked')
-    await missionChecks($, root, mission).catch((err) => $.ui.toast(`✦ Spark's checks could not run: ${message(err)}`))
-  const report = buildReport(mission, await missionRecords($, { id: m.id, root }), facts)
-  await $.fs.write(missionFile(root, m.id, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
-  await saveMission($, root, mission)
+  const pass = mission.status === 'finished' || mission.status === 'blocked' ? await missionChecks($, root, mission) : undefined
+  await queued(async () => {
+    const report = buildReport(mission, await missionRecords($, { id: m.id, root }), facts, pass)
+    await $.fs.write(missionFile(root, m.id, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
+    await saveMission($, root, mission)
+  })
   await openPane($, MISSION_PANE, 'mission')
 }
 
@@ -618,7 +642,7 @@ async function missionAction($: EngineInterface, at: { id: string; root: string 
     if (FINAL.has(m.status)) return `✦ the mission is already ${m.status}`
     const moved = move(m, 'cancelled', 'you cancelled it', now)
     await saveMission($, at.root, moved.mission, [moved.record])
-    await missionReport($, at.root, moved.mission)
+    void missionReport($, at.root, moved.mission).catch(() => {})
     return '✦ mission cancelled'
   }
   if (m.status !== 'review') return `✦ the mission is ${m.status}, not waiting for approval`
@@ -677,7 +701,7 @@ async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: 
     $.ui.toast(`✦ ${criteriaCount(done.mission.criteria.length)} drafted: /mission shows them, /mission approve starts`)
     await openPane($, MISSION_PANE, 'mission')
   }
-  if (FINAL.has(done.mission.status)) await missionReport($, at.root, done.mission)
+  if (FINAL.has(done.mission.status)) void missionReport($, at.root, done.mission).catch(() => {})
 }
 
 // ---------- /council in the terminal: the shared steps, with $.http and $.process as the I/O ----------

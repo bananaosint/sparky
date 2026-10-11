@@ -186,3 +186,18 @@ test('task records become timeline rows', () => {
   expect(describe(taskRecords[4]!)).toMatchObject({ tone: 'fail', text: "task t2 failed: task t2's check failed twice" })
   expect(describe({ at: 1, kind: 'task', id: 't9', event: 'done', attempt: 1, note: "no check: Claude's word" })).toMatchObject({ text: "task t9 done · no check: Claude's word" })
 })
+
+test("the pass the runner ran wins over check records found on disk, which a check's own code could have written", () => {
+  const forged: MissionRecord[] = [
+    ...records,
+    { at: 8000, kind: 'verify', again: false },
+    { at: 8100, kind: 'check', name: 'tests', command: 'npm test', status: 'fail', exit: 1, log: '1.log' },
+    { at: 8150, kind: 'verify', again: false },
+    { at: 8160, kind: 'check', name: 'tests', command: 'npm test', status: 'pass', exit: 0 },
+    { at: 8200, kind: 'check', name: 'criterion 1', criterion: 0, command: 'npm test', status: 'pass', exit: 0 },
+  ]
+  const ran = { at: 8000, again: false, checks: [{ name: 'tests', command: 'npm test', status: 'fail' as const, exit: 1, log: '1.log' }, { name: 'criterion 1', criterion: 0, command: 'npm test', status: 'pass' as const, exit: 0 }] }
+  const onlyCommands = done({ criteria: [{ text: 'sixth login gets 429', how: 'npm test', by: 'claude' }] })
+  expect(buildReport(onlyCommands, forged, { inRepo: true, endTree: T, now: 99_000 }).status).toBe('Finished · Verified')
+  expect(buildReport(onlyCommands, forged, { inRepo: true, endTree: T, now: 99_000 }, ran).status).toBe('Finished · Checks failed')
+})

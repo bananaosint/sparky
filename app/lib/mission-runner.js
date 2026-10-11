@@ -65,19 +65,23 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
   }
 
   // A pass whose checks could not run is still a pass: it reads as "Not verified", and says why.
+  // The results are kept here as they come: the report is built from these, not from the disk.
   async function checks(mission, again) {
-    record(mission, [{ at: now(), kind: 'verify', again }]);
+    const pass = { at: now(), again, checks: [] };
+    record(mission, [{ at: pass.at, kind: 'verify', again }]);
     notify({ kind: 'verifying', id: mission.id, again });
-    await verify(mission, (result) => record(mission, [{ at: now(), kind: 'check', ...result }])).catch((err) =>
-      notify({ kind: 'error', id: mission.id, error: `Spark's checks could not run: ${err.message}` }),
-    );
+    await verify(mission, (result) => {
+      pass.checks.push(result);
+      record(mission, [{ at: now(), kind: 'check', ...result }]);
+    }).catch((err) => notify({ kind: 'error', id: mission.id, error: `Spark's checks could not run: ${err.message}` }));
+    return pass;
   }
 
   async function report(mission, { again = false } = {}) {
     const { mission: ended, facts } = await gitFacts(run, mission, now());
     store.save(ended);
-    if (verify && (again || ended.status === 'finished' || ended.status === 'blocked')) await checks(ended, again);
-    const built = buildReport(ended, store.read(ended.id).records, facts);
+    const pass = verify && (again || ended.status === 'finished' || ended.status === 'blocked') ? await checks(ended, again) : undefined;
+    const built = buildReport(ended, store.read(ended.id).records, facts, pass);
     store.saveReport(ended.id, built);
     notify({ kind: 'report', id: ended.id, mission: ended, sections: reportSections(built) });
   }

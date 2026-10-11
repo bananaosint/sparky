@@ -138,6 +138,21 @@ export function planChecks(a: {
   return plan
 }
 
+export const CHECK_TIMED_OUT = '✦ spark: the check ran past its time limit'
+
+// The mod runs each check as `node -e CHECK_RUNNER -- <command> <ms>`: its process.run can't hand
+// cmd a command verbatim or end cmd's children, so this does both, as the app's runner does.
+// Past the limit it ends the whole tree, says so on stderr and exits 124.
+export const CHECK_RUNNER = [
+  "const { spawn } = require('child_process')",
+  'const [command, ms] = process.argv.slice(-2)',
+  "const child = spawn('cmd.exe', ['/d', '/s', '/c', '\"' + command + '\"'], { stdio: 'inherit', windowsHide: true, windowsVerbatimArguments: true })",
+  'let late = false',
+  "const timer = setTimeout(() => { late = true; spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }) }, Number(ms))",
+  `child.on('close', (code) => { clearTimeout(timer); if (late) { process.stderr.write('\\n${CHECK_TIMED_OUT}\\n'); process.exit(124) } process.exit(code ?? 1) })`,
+  "child.on('error', (e) => { clearTimeout(timer); process.stderr.write(String(e.message)); process.exit(1) })",
+].join('\n')
+
 // From the checks only: never from what a model said about its work.
 export function verdict(results: readonly CheckResult[], criteria: readonly Criterion[]): Verdict {
   if (!results.some((r) => r.status !== 'not-run')) return 'not verified'

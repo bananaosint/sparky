@@ -423,3 +423,18 @@ test("the mission view carries the plan: tasks, their states from Spark's record
   const plain = rig();
   assert.equal(plain.r.view(plain.r.start('plain').mission.id).plan, undefined);
 });
+
+test('records a check writes into the mission folder during the pass do not change the verdict', async () => {
+  let t;
+  // The tests fail; then the criterion's command writes a fresh pass of its own; then it passes.
+  const verify = async (m, onResult) => {
+    onResult({ name: 'tests', command: 'npm test', status: 'fail', exit: 1 });
+    t.store.append(m.id, { at: Date.now(), kind: 'verify', again: false });
+    t.store.append(m.id, { at: Date.now(), kind: 'check', name: 'tests', command: 'npm test', status: 'pass', exit: 0 });
+    onResult({ name: 'criterion 1', criterion: 0, command: 'npm test', status: 'pass', exit: 0 });
+  };
+  t = await approved({ verify });
+  t.r.onEvent(result('Done.'));
+  await t.r.idle();
+  assert.equal(t.store.read(t.id).report.status, 'Finished · Checks failed');
+});

@@ -1,15 +1,17 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
+import { CHECK_TIMED_OUT } from '../hooks/verify'
 
 const presentation = { isFullscreen: false, columns: 120 }
 const composer = { kind: 'composer' } as const
 const mission = ($: Engine, args = '') => $.command.run({ command: 'mission', args, origin: composer, presentation })
 const DRAFT = 'Read it.\n```mission\n{"title":"Rate-limit login","criteria":[{"text":"sixth login gets 429","how":"npm test"}]}\n```'
 const key = (p: string) => String(p).replace(/\//g, '\\')
+type Ran = { exitCode: number; stdout: string; stderr?: string }
 
 // A session at C:/app with an in-memory disk, git that answers what snapshots ask, and a prompt box.
 // `top`: the names at the repo top; `cmd`: how a check's command line (through cmd) ends.
-function terminal(on: any, { top = [] as string[], cmd = (_line: string) => ({ exitCode: 0, stdout: '' }) } = {}) {
+function terminal(on: any, { top = [] as string[], cmd = (_line: string): Ran | Promise<Ran> => ({ exitCode: 0, stdout: '' }) } = {}) {
   const disk = new Map<string, string>()
   const ran: string[] = []
   let box = ''
@@ -37,10 +39,11 @@ function terminal(on: any, { top = [] as string[], cmd = (_line: string) => ({ e
   on('process.run', (_$: unknown, e: any) => {
     const a: string[] = e.argv
     const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    if (a[0] === 'cmd') {
-      ran.push(a.slice(4).join(' '))
-      const r = cmd(a.slice(4).join(' '))
-      return out(r.stdout, r.exitCode)
+    // A check, through Spark's check runner: node -e <runner> -- <command> <ms>.
+    if (a[0] === 'node' && a[1] === '-e') {
+      const line = a[a.indexOf('--') + 1]!
+      ran.push(line)
+      return Promise.resolve(cmd(line)).then((r) => ({ value: { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }))
     }
     // package.json at the start snapshot: as it is now, so its scripts read as unchanged.
     if (a[1] === 'show') return disk.has(key('C:/app/package.json')) ? out(disk.get(key('C:/app/package.json'))!) : out('', 128)
@@ -156,6 +159,54 @@ test("a terminal mission ends with Spark's own checks: the verdict, the proof an
   expect(log).not.toContain(secret)
   const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
   expect(events.filter((e: any) => e.kind === 'verify' || e.kind === 'check').map((e: any) => e.kind)).toEqual(['verify', 'check', 'check'])
+})
+
+test("terminal checks: a check past its limit is timed out, and records a check writes during the pass don't count", async ($, on) => {
+  let calls = 0
+  const t = terminal(on, {
+    top: ['package.json'],
+    cmd: () => {
+      calls++
+      if (calls === 1) {
+        // The suite's own code writes a passing pass into the mission's records, then fails.
+        const [path, text] = t.files('events.jsonl')[0]!
+        t.disk.set(path, `${text}${JSON.stringify({ at: 1, kind: 'verify', again: false })}\n${JSON.stringify({ at: 2, kind: 'check', name: 'tests', status: 'pass' })}\n`)
+        return { exitCode: 1, stdout: 'not ok 1' }
+      }
+      return { exitCode: 124, stdout: '', stderr: `\n${CHECK_TIMED_OUT}\n` }
+    },
+  })
+  t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
+  await runningMission($, t)
+  await turnComplete($, 'Changed auth.js.')
+  await t.settle()
+  const report = JSON.parse(t.files('report.json')[0]![1])
+  expect(report.status).toBe('Finished · Checks failed')
+  expect(report.proof.checks.map((c: any) => [c.name, c.status])).toEqual([
+    ['tests', 'fail'],
+    ['criterion 1', 'timed-out'],
+  ])
+})
+
+test("a slow terminal check doesn't hold the mod's other work: /mission answers while it runs", async ($, on) => {
+  let release = () => {}
+  let released = false
+  const ok: Ran = { exitCode: 0, stdout: 'ok' }
+  // The first check waits until released; the ones after it answer at once.
+  const t = terminal(on, {
+    top: ['package.json'],
+    cmd: () => (released ? ok : new Promise<Ran>((r) => (release = () => ((released = true), r(ok))))),
+  })
+  t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
+  await runningMission($, t)
+  await turnComplete($, 'Changed auth.js.')
+  await t.settle()
+  expect(t.ran).toEqual(['npm test'])
+  expect((await mission($, 'cancel')).text).toBe('✦ the mission is already finished')
+  release()
+  await t.settle()
+  await t.settle()
+  expect(t.files('report.json')).toHaveLength(1)
 })
 
 test('a cancelled terminal mission is not checked', async ($, on) => {

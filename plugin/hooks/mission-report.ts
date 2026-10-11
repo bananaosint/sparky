@@ -90,9 +90,11 @@ function lastPass(records: readonly MissionRecord[]) {
   return i < 0 ? undefined : { start: records[i] as Of<'verify'>, checks: records.slice(i + 1).filter(is('check')) }
 }
 
-export function buildReport(m: Mission, records: readonly MissionRecord[], facts: Facts): Report {
+// `ran`: the pass the runner just ran, from its own memory. Check records on disk can come from a
+// check's own code, which runs with the person's rights; these can't.
+export function buildReport(m: Mission, records: readonly MissionRecord[], facts: Facts, ran?: { at: number; again: boolean; checks: CheckResult[] }): Report {
   const state = testState(records, facts)
-  const pass = lastPass(records)
+  const pass = ran ? { start: { at: ran.at, kind: 'verify' as const, again: ran.again }, checks: ran.checks } : lastPass(records)
   const v = pass && verdict(pass.checks, m.criteria)
   const planned = m.tasks?.length ? taskStates(m.tasks, records, { over: FINAL.has(m.status) }) : undefined
   const byCriterion = new Map((pass?.checks ?? []).filter((c) => typeof c.criterion === 'number').map((c) => [c.criterion, c] as const))

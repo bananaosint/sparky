@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { CHECK_RUNNER, CHECK_TIMED_OUT } from '../staged/plugin/hooks/verify.ts';
 import { join } from 'node:path';
 import { planFor, planTaskCheck, runChecks, shellExec, stopChecks } from '../lib/verify-run.js';
 import { gitIn } from '../lib/mission-open.js';
@@ -126,4 +128,28 @@ test('a check whose log cannot be written fails with the reason, and the checks 
   assert.equal(results[0].status, 'fail');
   assert.match(results[0].reason, /EISDIR|illegal operation/i);
   assert.equal(results[1].status, 'pass');
+});
+
+// The terminal's checks go through this script; here it runs for real.
+const viaRunner = (command, ms) =>
+  new Promise((resolve) => {
+    const child = spawn('node', ['-e', CHECK_RUNNER, '--', command, String(ms)], { windowsHide: true });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('close', (code) => resolve({ code, out, err }));
+  });
+
+test("the terminal's check runner hands cmd the command verbatim, passes the exit code, and ends a slow check's whole tree", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spark-verify-'));
+  writeFileSync(join(dir, 'say.js'), 'process.stdout.write(process.argv.slice(2).join("|")); process.exit(3)');
+  const said = await viaRunner(`node "${join(dir, 'say.js')}" "login limit" two`, 60000);
+  assert.equal(said.out, 'login limit|two');
+  assert.equal(said.code, 3);
+  const started = Date.now();
+  const slow = await viaRunner('node -e "setTimeout(() => {}, 60000)"', 500);
+  assert.equal(slow.code, 124);
+  assert.ok(slow.err.includes(CHECK_TIMED_OUT));
+  assert.ok(Date.now() - started < 15000);
 });
