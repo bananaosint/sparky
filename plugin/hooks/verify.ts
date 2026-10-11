@@ -15,6 +15,16 @@ export const isCommandHow = (how: string) => RUNNERS.has(how.trim().split(/\s+/)
 
 const UNTRUSTED = 'the folder is untrusted; only your own configured commands run'
 
+// The package.json script a command line runs, if any: `npm test`, `pnpm run e2e`, `yarn lint`.
+// Over-matching only makes Spark more careful. `bun test` is bun's own runner, not a script.
+function scriptOf(how: string) {
+  const [runner, a, b] = how.trim().split(/\s+/)
+  if (!['npm', 'pnpm', 'yarn', 'bun'].includes(runner?.toLowerCase() ?? '') || !a) return undefined
+  if (a === 'run' || a === 'run-script') return b
+  if (a === 't' || a === 'tst' || a === 'test') return runner?.toLowerCase() === 'bun' ? undefined : 'test'
+  return runner?.toLowerCase() === 'npm' || runner?.toLowerCase() === 'bun' ? undefined : a
+}
+
 function scripts(packageJson: string | undefined): Record<string, unknown> {
   try {
     const s = JSON.parse(packageJson ?? '{}')?.scripts
@@ -45,20 +55,29 @@ export function planChecks(a: {
   configured: { test?: string; typecheck?: string; lint?: string; build?: string }
   criteria: readonly Criterion[]
   trusted: boolean
-  // package.json scripts that changed between the mission's start and end snapshots
-  changedScripts: readonly string[]
+  // package.json scripts that changed since the mission's start snapshot; undefined: no snapshot
+  changedScripts: readonly string[] | undefined
   classify: (command: string) => GateVerdict
 }): PlannedCheck[] {
   const s = scripts(a.packageJson)
   const runner = runnerOf(a.files)
   const plan: PlannedCheck[] = []
+  const changed = (script: string | undefined) =>
+    !script
+      ? undefined
+      : a.changedScripts === undefined
+        ? `Spark can't tell whether the ${script} script changed (no start snapshot)`
+        : a.changedScripts.includes(script)
+          ? `the ${script} script changed during the mission`
+          : undefined
   // A check from the person's config always runs; one from the folder's own files needs trust and
   // an unchanged script.
   const project = (name: string, own: string | undefined, script: string | undefined, line: string | undefined) => {
     if (own?.trim()) return plan.push({ name, command: own.trim() })
     if (!line) return
     if (!a.trusted) return plan.push({ name, reason: UNTRUSTED })
-    if (script && a.changedScripts.includes(script)) return plan.push({ name, reason: `the ${script} script changed during the mission` })
+    const reason = changed(script)
+    if (reason) return plan.push({ name, reason })
     plan.push({ name, command: line })
   }
   const tests = testLine(a.files, a.packageJson)
@@ -72,6 +91,8 @@ export function planChecks(a: {
     if (!isCommandHow(c.how)) return
     const name = `criterion ${i + 1}`
     if (!a.trusted) return plan.push({ name, criterion: i, reason: UNTRUSTED })
+    const script = changed(scriptOf(c.how))
+    if (script) return plan.push({ name, criterion: i, reason: script })
     const gate = a.classify(c.how)
     if (gate) return plan.push({ name, criterion: i, reason: `the gate would ${gate.kind === 'deny' ? 'block it' : 'ask'}: ${gate.reason.replace(/^✦ spark gate: (blocked: )?/, '')}` })
     plan.push({ name, criterion: i, command: c.how.trim() })

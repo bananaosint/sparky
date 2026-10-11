@@ -53,6 +53,38 @@ test('a script changed during the mission is not run; with no test command at al
   expect(planChecks({ ...base, files: [], packageJson: undefined }).map((p) => p.reason)).toEqual(['no test command found'])
 })
 
+test("a criterion that runs a changed script is not run either; with no start snapshot the folder's scripts are not run", () => {
+  const plan = planChecks({
+    ...base,
+    changedScripts: ['test', 'e2e'],
+    files: ['package.json'],
+    packageJson: pkg({ test: 'node --test' }),
+    criteria: [crit('a', 'npm test -- auth'), crit('b', 'pnpm run e2e'), crit('c', 'npm run lint'), crit('d', 'node --test x.test.js')],
+  })
+  expect(plan.filter((p) => p.criterion !== undefined).map((p) => p.command ?? `not run: ${p.reason}`)).toEqual([
+    'not run: the test script changed during the mission',
+    'not run: the e2e script changed during the mission',
+    'npm run lint',
+    'node --test x.test.js',
+  ])
+  const unknown = planChecks({
+    ...base,
+    changedScripts: undefined,
+    configured: { lint: 'eslint .' },
+    files: ['package.json'],
+    packageJson: pkg({ test: 'node --test', build: 'tsc' }),
+    criteria: [crit('a', 'npm test -- auth'), crit('d', 'node --test x.test.js')],
+  })
+  const cant = (s: string) => `not run: Spark can't tell whether the ${s} script changed (no start snapshot)`
+  expect(unknown.map((p) => [p.name, p.command ?? `not run: ${p.reason}`])).toEqual([
+    ['tests', cant('test')],
+    ['lint', 'eslint .'],
+    ['build', cant('build')],
+    ['criterion 1', cant('test')],
+    ['criterion 2', 'node --test x.test.js'],
+  ])
+})
+
 test('criterion commands run unless the gate would ask; manual criteria are not planned', () => {
   const classify = (c: string) => (c.includes('install') ? { kind: 'ask' as const, reason: 'package install' } : undefined)
   const plan = planChecks({
