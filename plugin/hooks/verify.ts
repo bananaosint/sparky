@@ -41,7 +41,7 @@ const runnerOf = (files: readonly string[]) => (files.includes('pnpm-lock.yaml')
 
 export function planChecks(a: {
   files: readonly string[]
-  packageJson: string | undefined
+  packageJson?: string
   configured: { test?: string; typecheck?: string; lint?: string; build?: string }
   criteria: readonly Criterion[]
   trusted: boolean
