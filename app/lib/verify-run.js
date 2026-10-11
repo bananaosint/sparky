@@ -33,6 +33,13 @@ export async function planFor({ cwd, mission, config, trusted, run }) {
   });
 }
 
+// A task's check, planned as a criterion's command is: trust, the gate and changed scripts apply.
+export async function planTaskCheck({ cwd, mission, task, config, trusted, run }) {
+  const plan = await planFor({ cwd, mission: { ...mission, criteria: [{ text: task.title, how: task.check, by: 'claude' }] }, config, trusted, run });
+  const planned = plan.find((p) => p.criterion === 0) ?? { reason: 'its check is not a command', criterion: 0 };
+  return { ...planned, name: `task ${task.id}` };
+}
+
 // cmd's children (npm, node, the test runner) outlive a plain kill, so the whole tree goes.
 const killTree = (child) => spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }).on('error', () => child.kill());
 

@@ -13,12 +13,12 @@ const DRAFT = 'I read src/auth.\n```mission\n{"title":"Rate-limit login","criter
 const result = (text, over = {}) => ({ kind: 'result', ok: true, text, costUsd: 0.1, durationMs: 2000, usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 300 }, ...over });
 
 // A runner with Claude Code and the window replaced by arrays, on a real store in a temp folder.
-function rig({ run, verify, root = mkdtempSync(join(tmpdir(), 'spark-runner-')) } = {}) {
+function rig({ run, verify, checkTask, root = mkdtempSync(join(tmpdir(), 'spark-runner-')) } = {}) {
   let clock = new Date(2026, 9, 10, 18, 0, 0).getTime();
   const lines = [];
   const told = [];
   const store = createStore(root);
-  const r = createMissionRunner({ store, write: (l) => lines.push(JSON.parse(l)), notify: (m) => told.push(m), run, verify, now: () => (clock += 1000), hex4: () => 'beef' });
+  const r = createMissionRunner({ store, write: (l) => lines.push(JSON.parse(l)), notify: (m) => told.push(m), run, verify, checkTask, now: () => (clock += 1000), hex4: () => 'beef' });
   const texts = () => lines.filter((l) => l.type === 'user').map((l) => l.message.content[0].text);
   const modes = () => lines.filter((l) => l.type === 'control_request').map((l) => l.request.mode);
   return { r, store, root, lines, told, texts, modes };
@@ -327,4 +327,85 @@ test('a mission from a council plan goes straight to review, and approving it se
   await t.r.approve(out.mission.id, [{ text: 'p95 under 50 ms', how: 'npm run bench' }]);
   assert.match(t.texts().at(-1), /Plan \(from Council\):\n## Decision\nhybrid/);
   assert.match(t.r.fromPlan('again', [], 'p').error, /cancel it first/);
+});
+
+const PLANNED = `Read it.\n\`\`\`mission\n${JSON.stringify({
+  title: 'Rate-limit login',
+  spec: 'Per account, 15 minutes.',
+  criteria: [{ text: 'A sixth failed login gets 429', how: 'npm test' }],
+  tasks: [
+    { id: 't1', title: 'Limiter', do: 'Add a limiter', after: [], check: 'npm test -- limiter' },
+    { id: 't2', title: 'Message', do: 'Say when to retry', after: ['t1'] },
+  ],
+})}\n\`\`\``;
+
+// A mission with two tasks, approved; `checks` answers each task check in turn.
+async function tasked(checks = [], over = {}) {
+  const seen = [];
+  const t = rig({ ...over, checkTask: async (m, task, attempt) => (seen.push(`${task.id}#${attempt}`), checks.shift() ?? { name: `task ${task.id}`, status: 'pass', exit: 0 }) });
+  t.r.onEvent({ kind: 'init', sessionId: SESSION, model: 'claude-opus-5-5', skills: [] });
+  const { mission } = t.r.start('rate-limit the login route', { sessionId: SESSION });
+  t.r.onEvent(result(PLANNED));
+  const out = await t.r.approve(mission.id, [{ text: 'A sixth failed login gets 429', how: 'npm test' }], [
+    { id: 't1', do: 'Add a limiter', check: 'npm test -- limiter' },
+    { id: 't2', do: 'Say when to retry' },
+  ]);
+  return { ...t, id: mission.id, mission: out.mission, seen };
+}
+const taskEvents = (t) => t.store.read(t.id).records.filter((x) => x.kind === 'task').map((x) => `${x.id} ${x.event}#${x.attempt}`);
+
+test('a planned mission runs its tasks in order: each turn ends one task, Spark checks it and sends the next', async () => {
+  const t = await tasked();
+  assert.match(t.texts().at(-1), /Do only task t1 \(Limiter\) now: Add a limiter/);
+  t.r.onEvent(result('Added the limiter.'));
+  await t.r.idle();
+  assert.deepEqual(t.seen, ['t1#1']);
+  assert.match(t.texts().at(-1), /^Do only task t2 \(Message\) now: Say when to retry/);
+  assert.equal(t.store.read(t.id).mission.status, 'running');
+  t.r.onEvent(result('Added the message.'));
+  await t.r.idle();
+  assert.deepEqual(taskEvents(t), ['t1 started#1', 't1 done#1', 't2 started#1', 't2 done#1']);
+  const back = t.store.read(t.id);
+  assert.equal(back.mission.status, 'finished');
+  assert.equal(back.mission.reason, 'every task is done');
+  assert.ok(back.report);
+});
+
+test("a failed task check is sent back once with its tail; a second failure blocks the mission", async () => {
+  const fail = { name: 'task t1', status: 'fail', exit: 1, tail: 'not ok 1 limiter' };
+  const t = await tasked([fail, fail]);
+  t.r.onEvent(result('Added the limiter.'));
+  await t.r.idle();
+  assert.match(t.texts().at(-1), /^Task t1's check failed \(exit 1\):\n\nnot ok 1 limiter/);
+  t.r.onEvent(result('Fixed it.'));
+  await t.r.idle();
+  assert.deepEqual(t.seen, ['t1#1', 't1#2']);
+  assert.deepEqual(taskEvents(t), ['t1 started#1', 't1 retry#2', 't1 failed#2']);
+  const back = t.store.read(t.id).mission;
+  assert.equal(back.status, 'blocked');
+  assert.equal(back.reason, "task t1's check failed twice");
+});
+
+test("a task check that didn't run leaves the task done with the reason; Run as one piece drops the plan", async () => {
+  const t = await tasked([{ name: 'task t1', status: 'not-run', reason: 'the folder is untrusted; only your own configured commands run' }]);
+  t.r.onEvent(result('Added the limiter.'));
+  await t.r.idle();
+  const done = t.store.read(t.id).records.find((x) => x.kind === 'task' && x.event === 'done');
+  assert.equal(done.note, 'check not run: the folder is untrusted; only your own configured commands run');
+  const whole = rig();
+  const { mission } = whole.r.start('rate-limit the login route');
+  whole.r.onEvent(result(PLANNED));
+  const out = await whole.r.approve(mission.id, [{ text: 'A sixth failed login gets 429', how: 'npm test' }], []);
+  assert.equal(out.mission.tasks, undefined);
+  assert.doesNotMatch(whole.texts().at(-1), /Do only task/);
+});
+
+test('stop during a task, then Resume, sends that task again', async () => {
+  const t = await tasked();
+  t.r.onEvent(result('Added the limiter.'));
+  await t.r.idle();
+  t.r.stopped();
+  assert.equal(t.store.read(t.id).mission.status, 'paused');
+  t.r.resume(t.id, () => {});
+  assert.match(t.texts().at(-1), /^Resuming mission: Rate-limit login[\s\S]*Do only task t2 \(Message\) now/);
 });

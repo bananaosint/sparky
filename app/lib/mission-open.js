@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { createStore, excludeSpark } from './mission-store.js';
 import { createMissionRunner } from './mission-runner.js';
-import { planFor, runChecks } from './verify-run.js';
+import { planFor, planTaskCheck, runChecks } from './verify-run.js';
 import { treeNow } from '../staged/plugin/hooks/snapshot.ts';
 
 // git in `dir`, the way snapshot.ts runs commands. No shell: arguments go as given.
@@ -31,7 +31,12 @@ export async function openMissions({ cwd, write, notify, now, hex4, config = () 
       const plan = await planFor({ cwd: root, mission, config: config(), trusted: trusted(), run: git });
       await runChecks(plan, { cwd: root, logDir: join(root, '.spark', 'missions', mission.id, 'checks'), tree: git && (() => treeNow(git)), onResult });
     };
-    const missions = createMissionRunner({ store: createStore(root), write, notify, run: git, verify, now, hex4 });
+    const checkTask = async (mission, task, attempt) => {
+      const planned = await planTaskCheck({ cwd: root, mission, task, config: config(), trusted: trusted(), run: git });
+      const [result] = await runChecks([planned], { cwd: root, logDir: join(root, '.spark', 'missions', mission.id, 'tasks', `${task.id}-${attempt}`), tree: git && (() => treeNow(git)) });
+      return result;
+    };
+    const missions = createMissionRunner({ store: createStore(root), write, notify, run: git, verify, checkTask, now, hex4 });
     missions.recover();
     return { missions, root };
   } catch (err) {

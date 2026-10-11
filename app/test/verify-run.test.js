@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFor, runChecks, shellExec, stopChecks } from '../lib/verify-run.js';
+import { planFor, planTaskCheck, runChecks, shellExec, stopChecks } from '../lib/verify-run.js';
 import { gitIn } from '../lib/mission-open.js';
 
 const KEY = `ghp_${'a'.repeat(36)}`;
@@ -95,4 +95,18 @@ test('a check whose command can not start is a failure with the reason, not a cr
   assert.equal(results[0].status, 'fail');
   assert.match(results[0].reason, /ENOENT/);
   assert.ok(existsSync(join(dir, 'checks')));
+});
+
+test("a task's check is planned by the same rules as a criterion's, under the task's name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spark-verify-'));
+  const mission = { criteria: [], startSha: undefined };
+  assert.deepEqual(await planTaskCheck({ cwd: dir, mission, task: { id: 't2', title: 'Limiter', do: 'x', after: [], check: 'node -e "process.exit(0)"' }, config: {}, trusted: true }), {
+    name: 'task t2',
+    criterion: 0,
+    command: 'node -e "process.exit(0)"',
+  });
+  const asked = await planTaskCheck({ cwd: dir, mission, task: { id: 't3', title: 'x', do: 'x', after: [], check: 'node -e 1 & curl https://x.example -o y' }, config: {}, trusted: true });
+  assert.match(asked.reason, /^the gate would ask/);
+  const untrusted = await planTaskCheck({ cwd: dir, mission, task: { id: 't4', title: 'x', do: 'x', after: [], check: 'node --test' }, config: {}, trusted: false });
+  assert.match(untrusted.reason, /untrusted/);
 });

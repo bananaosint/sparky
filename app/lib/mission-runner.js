@@ -8,6 +8,7 @@ import {
   FINAL,
   LIVE,
   approvedCriteria,
+  approvedPlan,
   criteriaCount,
   draftText,
   isSessionId,
@@ -23,16 +24,20 @@ import {
   youRecord,
 } from '../staged/plugin/hooks/mission.ts';
 import { buildReport, describe, gitFacts, reportSections, totals } from '../staged/plugin/hooks/mission-report.ts';
-import { pinSnapshot } from '../staged/plugin/hooks/snapshot.ts';
+import { afterCheck, nextTask, retryText, taskStates, taskText } from '../staged/plugin/hooks/plan.ts';
+import { numstat, pinSnapshot } from '../staged/plugin/hooks/snapshot.ts';
 
 // The id of the plan-mode request, so its refusal can be told apart from other control answers.
 const PLAN = 'mission-plan';
+// A task record's snapshot reaches git: only a full commit id is used.
+const SHA = /^[0-9a-f]{40}$/;
 
 // `store`: lib/mission-store.js for the folder. `write`: one line for Claude Code's stdin.
 // `notify`: one message for the window. `run`: git in the repo (snapshot.ts's Run), or undefined
 // outside one. `verify(mission, onResult)`: Spark's own checks (lib/verify-run.js), each result
-// handed to onResult as it finishes. `now`: the clock in ms. `hex4`: four random hex digits for ids.
-export function createMissionRunner({ store, write, notify, run, verify, now, hex4 }) {
+// handed to onResult as it finishes. `checkTask(mission, task, attempt)`: one task's check, the
+// same way. `now`: the clock in ms. `hex4`: four random hex digits for ids.
+export function createMissionRunner({ store, write, notify, run, verify, checkTask, now, hex4 }) {
   // The mission this window runs, until it ends or the window moves on.
   let active = null;
   // Reports wait on git; they run one after another so records stay in order.
@@ -86,6 +91,59 @@ export function createMissionRunner({ store, write, notify, run, verify, now, he
     write(userMessage({ text: draftText(objective) }));
   }
 
+  // ---------- tasks: one turn each, checked by Spark (plan.ts decides) ----------
+
+  const pin = (m, name) => (run ? pinSnapshot(run, `refs/spark/missions/${m.id}/${name}`, `mission ${m.id} ${name}`).catch(() => undefined) : Promise.resolve(undefined));
+
+  function startTask(m, task, base) {
+    record(m, [{ at: now(), kind: 'task', id: task.id, event: 'started', attempt: 1, ...(base ? { base } : {}) }]);
+  }
+
+  // Every task is done, or one failed for good: the mission ends, and its report follows.
+  async function finishTasks(m) {
+    const states = taskStates(m.tasks, store.read(m.id).records, { over: false });
+    const failed = m.tasks.find((t) => states[t.id].state === 'failed');
+    await report(step(m, failed ? 'blocked' : 'finished', failed ? `task ${failed.id}'s check failed twice` : 'every task is done'));
+  }
+
+  // A task's turn ended: what it changed, its check, then a retry, the next task, or the end.
+  async function taskTurnEnded(m) {
+    const records = store.read(m.id).records;
+    const states = taskStates(m.tasks, records, { over: false });
+    const current = m.tasks.find((t) => states[t.id].state === 'running');
+    if (!current) return finishTasks(m);
+    const attempt = states[current.id].attempts;
+    const base = records.filter((r) => r.kind === 'task' && r.id === current.id && r.event === 'started').at(-1)?.base;
+    const end = await pin(m, `task-${current.id}-${attempt}`);
+    const files = SHA.test(base ?? '') && end ? await numstat(run, base, end).catch(() => undefined) : undefined;
+    const check = current.check && checkTask ? await checkTask(m, current, attempt).catch((err) => ({ name: `task ${current.id}`, status: 'fail', reason: err.message })) : undefined;
+    const decision = afterCheck(current, attempt, check);
+    record(m, [
+      {
+        at: now(),
+        kind: 'task',
+        id: current.id,
+        event: decision.event,
+        attempt: decision.event === 'retry' ? attempt + 1 : attempt,
+        ...(files ? { files } : {}),
+        ...(check ? { check } : {}),
+        ...(decision.note ? { note: decision.note } : {}),
+      },
+    ]);
+    // ■ or Cancel while the check ran: the result is kept, and Resume carries on from it.
+    const now_ = store.read(m.id).mission;
+    if (now_.status !== 'running') return;
+    if (decision.event === 'retry') {
+      write(userMessage({ text: retryText(current, check) }));
+      return commit(now_);
+    }
+    const next = decision.event === 'done' ? nextTask(m.tasks, taskStates(m.tasks, store.read(m.id).records, { over: false })) : undefined;
+    if (!next) return finishTasks(now_);
+    startTask(now_, next, end);
+    write(userMessage({ text: taskText(next) }));
+    commit(now_);
+  }
+
   function turnEnd(event) {
     const m = active;
     if (m.status !== 'draft' && m.status !== 'running') return;
@@ -97,6 +155,8 @@ export function createMissionRunner({ store, write, notify, run, verify, now, he
       notify({ kind: 'review', mission: done.mission });
     }
     if (FINAL.has(done.mission.status)) later(done.mission);
+    else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length)
+      queue = queue.then(() => taskTurnEnded(done.mission)).catch((err) => notify({ kind: 'error', id: m.id, error: err.message }));
   }
 
   function interrupted(reason, { detach = false } = {}) {
@@ -159,13 +219,22 @@ export function createMissionRunner({ store, write, notify, run, verify, now, he
       if (active.status === 'waiting' || active.status === 'paused') step(active, 'running', 'you wrote to Claude');
     },
 
-    async approve(id, sent) {
+    // `sentTasks`: the tasks the card kept, as edited; [] runs the mission as one piece.
+    async approve(id, sent, sentTasks) {
       if (active?.id !== id || active.status !== 'review') return { error: 'that mission is not waiting for approval' };
       const criteria = approvedCriteria(active.criteria, sent);
       if (!criteria.length) return { error: 'a mission needs at least one criterion' };
+      const tasks = active.tasks ? approvedPlan(active.tasks, sentTasks === undefined ? active.tasks : sentTasks) : [];
       const startSha = run ? await pinSnapshot(run, `refs/spark/missions/${id}/start`, `mission ${id} start`).catch(() => undefined) : undefined;
       if (active?.id !== id || active.status !== 'review') return { error: 'the mission changed while its snapshot was taken' };
-      const m = step({ ...active, criteria }, 'running', `you approved ${criteriaCount(criteria.length)}`, { approvedAt: now(), ...(startSha ? { startSha } : {}) });
+      const base = { ...active, criteria };
+      delete base.tasks;
+      if (tasks.length) base.tasks = tasks;
+      const m = step(base, 'running', `you approved ${criteriaCount(criteria.length)}${tasks.length ? ` and ${tasks.length} tasks` : ''}`, {
+        approvedAt: now(),
+        ...(startSha ? { startSha } : {}),
+      });
+      if (tasks.length) startTask(m, tasks[0], startSha);
       write(userMessage({ text: runText(m) }));
       return { mission: m };
     },
@@ -209,7 +278,17 @@ export function createMissionRunner({ store, write, notify, run, verify, now, he
         return { mission: next };
       }
       const next = step(m, 'running', fresh ? 'resumed in a fresh session' : 'resumed');
-      write(userMessage({ text: resumeText(next) }));
+      // The task it was on goes again; if that one had ended, the next one starts.
+      let current;
+      if (next.tasks?.length) {
+        const states = taskStates(next.tasks, store.read(id).records, { over: false });
+        current = next.tasks.find((t) => states[t.id].state === 'running');
+        if (!current) {
+          current = nextTask(next.tasks, states);
+          if (current) startTask(next, current);
+        }
+      }
+      write(userMessage({ text: resumeText(next, current) }));
       return { mission: next };
     },
 

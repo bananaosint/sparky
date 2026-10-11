@@ -106,3 +106,10 @@ test('a normal repo opens with missions at its top', async () => {
   assert.equal(opened.error, undefined);
   assert.deepEqual(opened.missions.list(), []);
 });
+
+test('approve hands the kept tasks to the runner with the criteria', async () => {
+  const got = [];
+  const { d } = deps({ missions: { approve: async (id, criteria, tasks) => (got.push([id, criteria, tasks]), { mission: { id } }) } });
+  await missionRequest({ action: 'approve', id: 'm1', criteria: [{ text: 'a', how: 'b' }], tasks: [{ id: 't1', do: 'x' }] }, d);
+  assert.deepEqual(got, [['m1', [{ text: 'a', how: 'b' }], [{ id: 't1', do: 'x' }]]]);
+});

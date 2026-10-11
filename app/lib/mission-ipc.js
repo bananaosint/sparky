@@ -19,7 +19,7 @@ export async function missionRequest(request, { missions, model, marathonRunning
     // Claude Code may have exited while the criteria waited: the run message needs a process.
     ensureClaude();
     notUser();
-    return missions.approve(id, request.criteria);
+    return missions.approve(id, request.criteria, request.tasks);
   }
   if (action === 'cancel') {
     const out = missions.cancel(id);
