@@ -230,7 +230,7 @@ export function describe(r: MissionRecord): Row | undefined {
       const tail = c?.tail ? { detail: s(c.tail) } : {}
       if (r.event === 'started') return { at: r.at, glyph: '▶', tone: 'info', text: `${id} started${r.worker === true ? ' in its own worktree' : ''}` }
       if (r.event === 'stopped') return { at: r.at, glyph: '■', tone: 'warn', text: `${id} stopped; it runs again on Resume` }
-      if (r.event === 'collided') return { at: r.at, glyph: '⤺', tone: 'warn', text: `${id} ${s(r.note).replace(/^collided/, 'collided')}; it runs again in the main tree` }
+      if (r.event === 'collided') return { at: r.at, glyph: '⤺', tone: 'warn', text: `${id} ${s(r.note)}; it runs again in the main tree` }
       if (r.event === 'retry') return { at: r.at, glyph: '↻', tone: 'warn', text: `${id}: check ${c ? outcome(c) : 'failed'}, sent back (attempt ${s(r.attempt)})`, ...tail }
       if (r.event === 'done') return { at: r.at, glyph: '✓', tone: 'ok', text: `${id} done${c ? ` · check ${outcome(c)}` : ''}${r.note ? ` · ${s(r.note)}` : ''}` }
       return { at: r.at, glyph: '✗', tone: 'fail', text: `${id} failed: ${s(r.note)}`, ...tail }
