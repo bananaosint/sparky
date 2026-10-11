@@ -65,8 +65,9 @@ test('start needs Claude Code; cancel of a live mission stops the turn; resume r
   assert.match((await missionRequest({ action: 'start', objective: 'x' }, { ...d, missions: undefined })).error, /no folder/);
 });
 
-test('check again goes to the runner and needs no Claude Code', async () => {
-  const { calls, d } = deps({ marathonRunning: true });
+test('check again goes to the runner and needs no Claude Code; never during a marathon, whose edits would race it', async () => {
+  assert.match((await missionRequest({ action: 'check-again', id: 'm1' }, deps({ marathonRunning: true }).d)).error, /marathon/);
+  const { calls, d } = deps();
   assert.deepEqual(await missionRequest({ action: 'check-again', id: 'm1' }, d), { ok: true });
   assert.deepEqual(calls, [['checkAgain', 'm1']]);
 });

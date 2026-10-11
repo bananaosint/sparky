@@ -438,3 +438,18 @@ test('records a check writes into the mission folder during the pass do not chan
   await t.r.idle();
   assert.equal(t.store.read(t.id).report.status, 'Finished · Checks failed');
 });
+
+test("while Spark's checks run, no mission starts or is approved and no second pass starts: they would race the checks", async () => {
+  let release = () => {};
+  const t = await approved({ verify: () => new Promise((r) => (release = r)) });
+  t.r.onEvent(result('Done.'));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(t.r.busy(), true);
+  assert.match(t.r.start('another objective').error, /Spark is running its checks/);
+  assert.match(t.r.fromPlan('x', [{ text: 'a', how: 'b', by: 'claude' }], 'p').error, /Spark is running its checks/);
+  assert.match(t.r.checkAgain(t.id).error, /Spark is running its checks/);
+  release();
+  await t.r.idle();
+  assert.equal(t.r.busy(), false);
+  assert.equal(t.r.start('another objective').mission.status, 'draft');
+});

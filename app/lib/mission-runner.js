@@ -42,6 +42,10 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
   let active = null;
   // Reports wait on git; they run one after another so records stay in order.
   let queue = Promise.resolve();
+  // Passes of Spark's checks running or waiting their turn: a new mission, a marathon or another
+  // pass would change the tree under them.
+  let checking = 0;
+  const CHECKING = 'Spark is running its checks: wait for the report';
 
   function record(mission, records) {
     for (const r of records) {
@@ -86,8 +90,16 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     notify({ kind: 'report', id: ended.id, mission: ended, sections: reportSections(built) });
   }
 
-  function later(mission, options) {
-    queue = queue.then(() => report(mission, options)).catch((err) => notify({ kind: 'error', id: mission.id, error: err.message }));
+  // A pass counts from the moment it is due, so nothing starts while it waits its turn.
+  function later(mission, options = {}) {
+    const counts = Boolean(verify && (options.again || mission.status === 'finished' || mission.status === 'blocked'));
+    if (counts) checking++;
+    queue = queue
+      .then(() => report(mission, options))
+      .catch((err) => notify({ kind: 'error', id: mission.id, error: err.message }))
+      .finally(() => {
+        if (counts) checking--;
+      });
   }
 
   function draft(objective) {
@@ -107,7 +119,12 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
   async function finishTasks(m) {
     const states = taskStates(m.tasks, store.read(m.id).records, { over: false });
     const failed = m.tasks.find((t) => states[t.id].state === 'failed');
-    await report(step(m, failed ? 'blocked' : 'finished', failed ? `task ${failed.id}'s check failed twice` : 'every task is done'));
+    checking++;
+    try {
+      await report(step(m, failed ? 'blocked' : 'finished', failed ? `task ${failed.id}'s check failed twice` : 'every task is done'));
+    } finally {
+      checking--;
+    }
   }
 
   // A task's turn ended: what it changed, its check, then a retry, the next task, or the end.
@@ -173,11 +190,12 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
   }
 
   return {
-    busy: () => Boolean(active && LIVE.has(active.status)),
+    busy: () => Boolean(checking || (active && LIVE.has(active.status))),
     idle: () => queue,
 
     start(objective, { sessionId } = {}) {
       if (active) return { error: `mission "${active.title}" is ${active.status}: cancel it first` };
+      if (checking) return { error: CHECKING };
       if (!objective.trim()) return { error: 'a mission needs an objective: /mission <what should be true when it is done>' };
       const { mission, record: first } = newMission(objective, now(), hex4(), store.gateSize());
       active = { ...mission, ...(isSessionId(sessionId) ? { sessionId } : {}) };
@@ -189,6 +207,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     // A Council synthesis becomes a mission straight in review: its criteria are already drafted.
     fromPlan(objective, criteria, plan, { sessionId } = {}) {
       if (active) return { error: `mission "${active.title}" is ${active.status}: cancel it first` };
+      if (checking) return { error: CHECKING };
       if (!criteria.length) return { error: 'the council plan has no acceptance criteria to start from' };
       const { mission, record: first } = newMission(objective, now(), hex4(), store.gateSize(), { criteria, plan });
       active = { ...mission, ...(isSessionId(sessionId) ? { sessionId } : {}) };
@@ -226,6 +245,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     // `sentTasks`: the tasks the card kept, as edited; [] runs the mission as one piece.
     async approve(id, sent, sentTasks) {
       if (active?.id !== id || active.status !== 'review') return { error: 'that mission is not waiting for approval' };
+      if (checking) return { error: CHECKING };
       const criteria = approvedCriteria(active.criteria, sent);
       if (!criteria.length) return { error: 'a mission needs at least one criterion' };
       const tasks = active.tasks ? approvedPlan(active.tasks, sentTasks === undefined ? active.tasks : sentTasks) : [];
@@ -312,6 +332,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     // race the checks.
     checkAgain(id) {
       if (active && LIVE.has(active.status)) return { error: `mission "${active.title}" is ${active.status}: check again once it stops` };
+      if (checking) return { error: CHECKING };
       const m = store.read(id)?.mission;
       if (!verify || !m || !FINAL.has(m.status)) return { error: 'only an ended mission is checked again' };
       later(m, { again: true });
