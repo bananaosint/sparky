@@ -40,6 +40,7 @@ It installs Claude Code too if it's missing, downloads the latest Spark installe
   Sparky's answers in the window (Gemini and Auto) also come in 2 to 4 headed sections of 3 to 6 bullets. The thread's timer and "done in" line read `mm:ss`, or `hh:mm:ss` past an hour. Drag the effort bar from low to max (arrow keys work; hovering previews how charged Sparky gets); `/model sonnet` and `/effort high` still work. Every switch charges Sparky up.
 - **Modes:** `/antislop` (also `/red-team`, `/grillme`) turns a Spark mode on for every message; its chip turns it off. Other `/commands` go straight to Claude Code.
 - **Marathons:** `/marathon <task> [--time 1.5h] [--tokens 2m]` keeps Claude working on a task, in short review passes, until the time or the tokens run out, even when the task looks finished. See [Marathons](#marathons).
+- **Council:** `/council <question>` (Light) or `/council full <question>` has several models propose answers on their own, other models judge them blind, and Claude synthesize the strongest plan. **Start as mission** turns that plan into a mission. See [Council](#council).
 - **Missions:** `/mission <objective>` (or **Missions** in the header) has Claude read the project and draft acceptance criteria without changing anything. You edit and approve them, Claude does the work, and Spark records what happened: tool calls, your approvals, test-gate runs, builds, halts, cost. The mission ends with a report built from those records, next to Claude's own account, which is marked unverified. See [Missions](#missions).
 - **What it costs, and who pays:** after each turn: the API-rate price Claude Code reports, the model, tokens in and out, tool calls, and whether it counts toward your Claude plan (not billed per message) or is billed to an API key. Gemini answers say they run on your Gemini key's project.
 - **Header:** the folder you're in, the model answering, the effort level.
@@ -80,6 +81,53 @@ What it doesn't cover: time spent waiting on a permission card counts, so turn o
 - **Stopping:** ■ pauses a mission, and Resume carries on in the same session. Closing Spark, New chat or another folder interrupts it, and Resume picks it up later. If the session can't be resumed, the next Resume starts a fresh one.
 - **One at a time:** a mission and a marathon don't run together, and missions need Claude Code (not Gemini or Auto).
 - **In the terminal:** `/mission <objective>` fills the prompt box with the draft request; `/mission approve` fills it with the run request; `/mission cancel` ends it; `/mission` opens the pane. The terminal can't see costs or your permission answers, has no criteria editor and no Resume.
+
+## Council
+
+`/council how should we cache the provider catalogs?` runs Light; `/council full …` runs Full.
+
+| | Light | Full |
+|---|---|---|
+| Proposers | Sonnet + 3 discovered models | Opus, Sonnet, Fable + 5 discovered models |
+| Judges | 2 | 3 |
+| Synthesis | Sonnet | Fable |
+| Proposal length | up to 900 words | up to 1,800 words |
+
+Light is lighter because it makes fewer and shorter calls, not because it picks faster models: Spark has no latency data to claim that.
+
+1. **The brief.** Claude Sonnet reads the project (read-only) and writes the brief every model gets: the objective, the constraints, the criteria, and at most 12 short code excerpts. Secrets are stripped.
+2. **The pre-flight card** shows the brief exactly as it would be sent. It also shows the panel: each model, why it was picked, its access (your Claude plan, your Gemini key, free hosted, paid hosted, local, open weights) and its estimated cost. Empty seats, OpenRouter's free requests left today and the paid estimate against your cap are listed too. Nothing leaves your machine until you tick consent for each outside provider and press Run. Spark remembers the consent.
+3. **Proposals.** Each model works alone from the same brief, with its own perspective (simplest, strongest architecture, performance, reliability, …). A proposal must use the sections A to L; one that doesn't is asked once more, then marked failed. A failed model is never replaced with a made-up answer.
+4. **Judging.** The proposals become letters, with model and vendor names stripped, and each judge scores every letter 0–10 on a 100-point rubric without seeing the other judges. Each judge also says which contributions from other letters a hybrid should take, drop or reconcile. Spark computes the totals itself and sorts the result into one of four cases:
+   - *dominant*: one letter leads every judge or by 10 points, with no critical flag
+   - *hybrid*: most judges say a combination is worth it
+   - *contested*
+   - *inadequate*: the best mean is under 55
+
+   A critical flag stops a letter from dominating, and disagreements of 3 points or more are listed.
+5. **Synthesis.** Claude may read the project to check the proposals' claims. It returns the decision, the contributions used and rejected, the conflicts resolved, the steps, acceptance criteria and what is still uncertain. **Start as mission** makes a mission from it, starting at the criteria card.
+
+The card updates as each model answers:
+- each model's state: queued, running, done, failed, timed out, unavailable
+- the proposals by letter, with the models named once the run ends
+- the voting matrix and the combination analysis
+- the synthesis
+- what each provider reported it cost
+
+**Stop the council** cancels the calls in flight. A council keeps only what really came back. With fewer than 2 proposals or 2 judges it stops and says why.
+
+**Models.** Claude is always there, on your plan. With an **OpenRouter key** (⚙ settings), Spark reads OpenRouter's catalog live and picks open-weight and free models by OpenRouter's coding and intelligence benchmark indexes, one per model family. With your Gemini key, Gemini and Gemma models join; with Ollama running, local models of 7B parameters or more join. Ollama's `:cloud` models run on Ollama's servers, so they're left out. Judges never repeat a proposer. They come from new families where possible, and from a proposer's family only when nothing else is left, which the card says.
+
+**Privacy and cost.**
+- OpenRouter requests send `data_collection: deny` unless you allow otherwise in the consent box; then fewer free models may answer.
+- Free OpenRouter models allow 20 requests a minute and 50 a day (1,000 with $10 of credits bought).
+- Paid calls are capped per run by `councilBudgetUsd` in `%APPDATA%\spark\config.json` (⚙ settings, default $1). The cap is checked on the estimate before the run, not enforced in the middle of a call.
+- Claude calls count toward your plan and are shown at API rates. Gemini doesn't report cost.
+- Records go to `.spark/councils/<id>.json`.
+
+**In the terminal:** `/council [full] <question>` writes the brief and opens a pane with the panel. `/council run` (or the pane's button) is your consent to send the brief to the providers it names. Then `/council cancel` and `/council mission`.
+
+**What was tested for real:** a Light council with Claude and Gemini, end to end. A Full council and OpenRouter calls were not run end to end (no OpenRouter key was available); the OpenRouter client follows its documented API and is tested against a fake one.
 
 ## Terminal version
 
@@ -123,6 +171,7 @@ These prompts are sent as typed instead:
 | `/spark-restore [N]` | List turn snapshots, or restore one (asks first; the current state is snapshotted, so it can be undone) |
 | `/spark-fix` | Send the last failed `spark try` command to Claude |
 | `/goal <goal> [--time 30m] [--tokens 500k]` | Work toward a goal: after each turn Gemini compares the changes with the goal and puts the next step in the prompt box (Enter sends it, or edit it). Ends when you press `6` (goal met) or `7` (stop), or at the time or token limit, counted across the whole goal. `/goal` shows progress, `/goal stop` ends it |
+| `/council [full] <question> \| run \| cancel \| mission` | A council: the brief and panel in a pane, then blind proposals, judging and a synthesis that can start a mission (see [Council](#council)) |
 | `/mission <objective> \| approve \| cancel` | A mission: Claude drafts acceptance criteria read-only, you approve, Spark records the work and ends with a report (see [Missions](#missions)); bare `/mission` opens its pane |
 | `/spark-agents` | Pane with subagents and worktrees; test a worktree, then merge it once its tests pass |
 | `/spark-unhalt` | Lift a halt once the post-mortem is written (see Guardrails) |

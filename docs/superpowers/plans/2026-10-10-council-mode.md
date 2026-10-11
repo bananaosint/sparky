@@ -37,7 +37,7 @@
 - `pickCouncil(candidates, mode, { briefChars }) → { proposers: Seat[], judges: Seat[], synth: Seat, empty: string[] }`, where `Seat = { candidate, reason, perspective? }`.
 - `estimate(seat, inputChars, mode) → { usd?: number, label: string }`, and `MODES` (Light/Full numbers from the spec).
 
-- [ ] Tests (`plugin/test/council.test.ts`):
+- [x] Tests (`plugin/test/council.test.ts`):
   - openrouter normalization: free when both prices are "0", open weights from `hugging_face_id`, benchmarks read, non-text models dropped
   - gemini and ollama normalization
   - full picks Opus, Sonnet, Fable plus 5, one per family
@@ -46,7 +46,7 @@
   - a short pool names the empty seats
   - light shape: Sonnet plus 3 proposers, 2 judges, Sonnet synthesizing, Opus allowed as judge
   - estimate: paid, free, Claude marked "on your plan"
-- [ ] Watch them fail, implement, see them pass, `npm run check`, commit.
+- [x] Watch them fail, implement, see them pass, `npm run check`, commit.
 
 ### Task 2: Prompts, validation, blind packets, aggregation (`council.ts`)
 
@@ -58,7 +58,7 @@
 - `aggregate(verdicts, letters) → Aggregate`, with `case` set to `dominant | hybrid | contested | inadequate`.
 - `synthPrompt(...)`, `RUBRIC`.
 
-- [ ] Tests:
+- [x] Tests:
   - the brief block parses, and its excerpts are capped and redacted
   - missing sections are named
   - verdict validation rejects unknown or missing letters, scores outside 0–10, and severities outside the enum
@@ -66,7 +66,7 @@
   - aggregate: weighted totals are computed by Spark (never trusted from the model), plus Borda and first-place votes
   - aggregate cases: dominant; hybrid; contested; inadequate (best mean under 55); a top-scored proposal with a critical flag is not dominant
   - aggregate lists disagreements of 3 points or more
-- [ ] Red, green, check, commit.
+- [x] Red, green, check, commit.
 
 ### Task 3: Providers (`council-providers.ts`)
 
@@ -77,19 +77,19 @@
 - `claudeArgv(model, system, { readOnly }) → string[]`, `parseClaude(json) → { text, usd, inTokens, outTokens }`.
 - `retryAfterMs(res)`.
 
-- [ ] Tests:
+- [x] Tests:
   - the OpenRouter body carries `provider.data_collection`, `max_tokens` and the messages
   - its parse reads `usage.cost` into `usd`
   - Gemini and Ollama bodies and parses
   - Claude argv: read-only only when asked, and settings and MCP always off
   - `retryAfterMs` is capped at 30 s
-- [ ] Red, green, check, commit.
+- [x] Red, green, check, commit.
 
 ### Task 4: Orchestrator (`council-run.ts`)
 
 **Produces:** `runCouncil({ brief, panel, mode, call, notify, now, shuffle, signal }) → Promise<CouncilRecord>`, where `call(seat, request, signal) → { text, usd?, inTokens?, outTokens? }`. It notifies `{ kind: 'seat', seat, state }`, `{ kind: 'stage', stage }` and `{ kind: 'record', record }`.
 
-- [ ] Tests (`plugin/test/council-run.test.ts`, fake `call` and clock):
+- [x] Tests (`plugin/test/council-run.test.ts`, fake `call` and clock):
   - stages run in order, and a judge's input contains no model id
   - at most 4 calls run at once
   - a timeout marks the seat *timed out*
@@ -99,7 +99,7 @@
   - fewer than 2 proposals: the run is *failed* and partial results are kept
   - aborting the signal mid-Stage B: *cancelled*, finished work kept
   - synthesis gets the aggregate and the disagreements
-- [ ] Red, green, check, commit.
+- [x] Red, green, check, commit.
 
 ### Task 5: App I/O and settings (`app/lib/council-io.js`, key slot)
 
@@ -107,22 +107,22 @@
 - `createCouncilIo({ fetchImpl, spawn, keys, cwd, cachePath, now })`, returning `{ catalogs(), call(seat, request, signal), freeRequestsLeft(), killAll() }`.
 - The OpenRouter key is stored at `%APPDATA%\spark\openrouter.key` through `saveKey`, `loadKey` and `clearKey` with a file path.
 
-- [ ] Tests (`app/test/council-io.test.js`, fake `fetch` and `spawn`):
+- [x] Tests (`app/test/council-io.test.js`, fake `fetch` and `spawn`):
   - a catalog fresh within 6 h comes from the cache
   - a stale catalog with a failed fetch falls back, with its age
   - a missing key leaves its provider absent
   - `call` routes to the right provider
   - `killAll` kills tracked Claude processes
-- [ ] Red, green, commit.
+- [x] Red, green, commit.
 
 ### Task 6: Mission handoff (`mission.ts`, `mission-runner.js`)
 
 **Produces:** `newMission(objective, at, hex4, gateOffset, { criteria, plan })`, which starts in `review` when criteria are given. `runText` adds a "Plan (from Council)" section when `plan` is set. The runner gets `fromPlan(objective, criteria, plan, { sessionId })`.
 
-- [ ] Tests:
+- [x] Tests:
   - a planned mission starts in `review` with its criteria and plan, and approving it sends a run text that includes the plan
   - `asMission` keeps `plan` as a string, clipped to 20,000 characters
-- [ ] Red, green, commit.
+- [x] Red, green, commit.
 
 ### Task 7: Main wiring and store
 
@@ -137,7 +137,7 @@
 - In settings: `openrouterKey` (DPAPI) and `councilBudgetUsd`.
 - Window messages: `council` events relayed from `notify`.
 
-- [ ] Main has no unit tests (the same as missions). Verify with `node --check app/main.js`, the app test suite, and the e2e.
+- [x] Main has no unit tests (the same as missions). Verify with `node --check app/main.js`, the app test suite, and the e2e.
 
 ### Task 8: Window
 
@@ -147,14 +147,14 @@
 - The live result card: seat states, the proposal gallery, the voting matrix, combination analysis, the synthesis, the execution summary, the audit, and Start as mission.
 - An OpenRouter key field and a run cap field in ⚙ settings.
 
-- [ ] Browser check with a stubbed bridge at 720 and 1440 px, in both themes. Then commit.
+- [x] Browser check with a stubbed bridge at 720 and 1440 px, in both themes. Then commit.
 
 ### Task 9: Terminal `/council`
 
-- [ ] If the mod can run `runCouncil` with `$.http.fetch` and `$.process.run(['claude', …], { stdin, timeoutMs })`, add `/council [full] <q>`. It works through a pane, with Run and Cancel as pane buttons and consent and keys read from Spark's config. Otherwise, add a README line saying the terminal has no `/council` yet. Test with the fake engine, as `mission-terminal.test.ts` does.
+- [x] If the mod can run `runCouncil` with `$.http.fetch` and `$.process.run(['claude', …], { stdin, timeoutMs })`, add `/council [full] <q>`. It works through a pane, with Run and Cancel as pane buttons and consent and keys read from Spark's config. Otherwise, add a README line saying the terminal has no `/council` yet. Test with the fake engine, as `mission-terminal.test.ts` does.
 
 ### Task 10: README, end-to-end Light run, verification
 
-- [ ] README section "Council".
-- [ ] End-to-end Light council in a scratch repo with Claude and Gemini (no OpenRouter key). Check every number on the card against the run record.
-- [ ] Full suites green, then commit. State plainly that Full and OpenRouter were not run end to end.
+- [x] README section "Council".
+- [x] End-to-end Light council in a scratch repo with Claude and Gemini (no OpenRouter key). Check every number on the card against the run record.
+- [x] Full suites green, then commit. State plainly that Full and OpenRouter were not run end to end.
