@@ -154,3 +154,14 @@ test('with no benchmarks and equal context, the newer Gemini version ranks first
   const panel = pickCouncil([...CLAUDE_CANDIDATES, ...gemini], 'light', { briefChars: 1000 })
   expect(panel.proposers.map((s) => s.candidate.id)).toEqual(['sonnet', 'gemini-3.8-flash', 'gemma-4-31b-it'])
 })
+
+test("Ollama's cloud models are left out: they run on Ollama's servers, not this machine", () => {
+  const local = normalizeOllama({
+    models: [
+      { name: 'qwen3.5:cloud', details: { family: 'qwen3' } },
+      { name: 'gpt-oss:120b-cloud', details: { family: 'gptoss', parameter_size: '116.8B' } },
+      { name: 'qwen3:32b', details: { family: 'qwen3', parameter_size: '32.8B' } },
+    ],
+  })
+  expect(local.map((c) => c.id)).toEqual(['qwen3:32b'])
+})

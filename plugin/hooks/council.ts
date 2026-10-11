@@ -132,12 +132,14 @@ const billions = (size: unknown) => {
 
 // GET http://127.0.0.1:11434/api/tags: local models, open weights, context not reported. Models
 // under 7B parameters are left out: a live run showed them unable to follow the proposal format.
+// So are Ollama's cloud models (":cloud", "-cloud" tags): they run on Ollama's servers, so the
+// brief would leave this machine without the consent every other remote provider needs.
 export function normalizeOllama(json: unknown): Candidate[] {
   return list(obj(json).models).flatMap((raw): Candidate[] => {
     const m = obj(raw)
     const id = typeof m.name === 'string' ? m.name : ''
     const size = billions(obj(m.details).parameter_size)
-    if (!id || (size !== undefined && size < 7)) return []
+    if (!id || /[:-]cloud$/i.test(id) || (size !== undefined && size < 7)) return []
     const family = typeof obj(m.details).family === 'string' ? String(obj(m.details).family) : id.split(':')[0]!
     return [{ id, provider: 'ollama', name: id, family, access: 'local', openWeights: true }]
   })
