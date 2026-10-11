@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { layers, nextTask, removeTask, retryText, taskStates, taskText, validatePlan } from '../hooks/plan'
+import { afterCheck, layers, nextTask, removeTask, retryText, taskStates, taskText, validatePlan } from '../hooks/plan'
 import type { Task, TaskRecord } from '../hooks/plan'
 
 const raw = [
@@ -68,4 +68,13 @@ test('the task and retry messages name the task, and the retry carries the faili
   expect(retryText(tasks[1]!, { name: 'task t2', status: 'fail', exit: 1, tail: 'not ok 1 limiter' })).toBe(
     "Task t2's check failed (exit 1):\n\nnot ok 1 limiter\n\nFix it, then end your turn.",
   )
+})
+
+test("after a task's check: pass, no check or a check that didn't run is done; a failure retries once, then fails", () => {
+  const [t1, t2] = [tasks[0]!, tasks[1]!]
+  expect(afterCheck(t1, 1)).toEqual({ event: 'done', note: "no check: Claude's word" })
+  expect(afterCheck(t2, 1, { name: 'task t2', status: 'pass', exit: 0 })).toEqual({ event: 'done' })
+  expect(afterCheck(t2, 1, { name: 'task t2', status: 'not-run', reason: 'the folder is untrusted' })).toEqual({ event: 'done', note: 'check not run: the folder is untrusted' })
+  expect(afterCheck(t2, 1, { name: 'task t2', status: 'fail', exit: 1 })).toEqual({ event: 'retry' })
+  expect(afterCheck(t2, 2, { name: 'task t2', status: 'timed-out' })).toEqual({ event: 'failed', note: "task t2's check failed twice" })
 })

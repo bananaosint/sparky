@@ -85,6 +85,14 @@ export function nextTask(tasks: readonly Task[], states: Record<string, TaskView
   return tasks.find((t) => states[t.id]?.state === 'queued' && t.after.every((a) => states[a]?.state === 'done'))
 }
 
+// What a task's turn comes to once Spark has run its check. One retry, then the task fails.
+export function afterCheck(t: Task, attempt: number, check?: Partial<CheckResult>): { event: 'done' | 'retry' | 'failed'; note?: string } {
+  if (!t.check || !check) return { event: 'done', note: "no check: Claude's word" }
+  if (check.status === 'pass') return { event: 'done' }
+  if (check.status === 'not-run') return { event: 'done', note: `check not run: ${check.reason ?? ''}` }
+  return attempt < 2 ? { event: 'retry' } : { event: 'failed', note: `task ${t.id}'s check failed twice` }
+}
+
 export const taskText = (t: Task) => `Do only task ${t.id} (${t.title}) now: ${t.do}\n${t.check ? `Its check: ${t.check}. ` : ''}End your turn when it is done.`
 
 export const retryText = (t: Task, check: Partial<CheckResult>) =>

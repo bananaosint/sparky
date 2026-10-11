@@ -236,3 +236,13 @@ test('a plan and task records from disk: a hostile plan is dropped, a long spec 
   expect(asRecord({ at: 1, kind: 'task', id: 't1', event: 'done', attempt: 1 })).toBeDefined()
   for (const bad of [{ at: 1, kind: 'task', id: 't1', event: 'won', attempt: 1 }, { at: 1, kind: 'task', id: '../x', event: 'done', attempt: 1 }]) expect(asRecord(bad)).toBeUndefined()
 })
+
+test("with tasks, a normal turn end is the task's end: the mission stays running for Spark to check it", () => {
+  const m = mission({ status: 'running', approvedAt: AT, criteria: planned.criteria, tasks: planned.tasks! })
+  expect(onTurnEnd(m, { ok: true, text: 'Added the limiter.' }, false)).toEqual({ to: 'running', reason: 'the task turn ended', task: true })
+  expect(onTurnEnd(m, { ok: true, text: 'Per IP or per account?' }, false).to).toBe('waiting')
+  expect(onTurnEnd(m, { ok: false, text: 'API error' }, false).to).toBe('blocked')
+  const ended = turnEnded(m, [], { ok: true, text: 'Added the limiter.' }, [], 7, AT + 9)
+  expect(ended.mission).toMatchObject({ status: 'running', gateOffset: 7 })
+  expect(ended.records).toEqual([])
+})

@@ -52,7 +52,8 @@ export type MissionRecord =
   | ({ at: number; kind: 'check' } & CheckResult)
   | TaskRecord
 export type Drafted = { title: string; criteria: Criterion[]; spec?: string; tasks?: Task[]; planError?: string }
-export type TurnEnd = { to: Status; reason: string; drafted?: Drafted }
+// `task`: the turn ended one of the mission's tasks; the status stays until Spark checks it.
+export type TurnEnd = { to: Status; reason: string; drafted?: Drafted; task?: boolean }
 
 const STATUSES: readonly Status[] = ['draft', 'review', 'running', 'waiting', 'paused', 'interrupted', 'finished', 'blocked', 'cancelled']
 export const FINAL: ReadonlySet<Status> = new Set<Status>(['finished', 'blocked', 'cancelled'])
@@ -359,6 +360,7 @@ export function onTurnEnd(m: Mission, turn: { ok: boolean; text: string }, halte
   if (!turn.ok) return { to: 'blocked', reason: `the turn failed: ${clean(turn.text || 'no message', 200)}` }
   if (halted) return { to: 'blocked', reason: 'halted after two failed test or build runs' }
   if (endsInQuestion(turn.text)) return { to: 'waiting', reason: 'Claude asked you a question' }
+  if (m.tasks?.length) return { to: 'running', reason: 'the task turn ended', task: true }
   return { to: 'finished', reason: 'Claude finished the work' }
 }
 
@@ -385,6 +387,7 @@ export function turnEnded(
     if (d.spec) base.spec = d.spec
     if (d.tasks) base.tasks = d.tasks
   }
+  if (end.task) return { mission: base, records: [...gates] }
   const moved = move(base, end.to, end.reason, at)
   return { mission: moved.mission, records: [...gates, moved.record] }
 }
