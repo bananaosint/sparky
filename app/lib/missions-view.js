@@ -119,6 +119,62 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
     return box;
   }
 
+  // The task graph in layers: a task sits one layer below the longest chain it waits for, so
+  // tasks in one layer don't wait for each other. Selecting one shows what happened in it.
+  function planNode(plan, spec) {
+    const box = el('section', 'plan');
+    box.append(el('h3', '', 'Plan'));
+    if (spec) box.append(el('p', 'spec', spec));
+    const byId = new Map(plan.tasks.map((t) => [t.id, t]));
+    const panel = el('div', 'task-panel');
+    const graph = el('div', 'plan-graph');
+    const select = (t, node) => {
+      for (const n of graph.querySelectorAll('.task-node')) n.setAttribute('aria-pressed', String(n === node));
+      panel.replaceChildren(...taskDetail(t));
+    };
+    plan.layers.forEach((layer, i) => {
+      if (i) graph.append(el('div', 'layer-arrow', '↓'));
+      const row = el('div', 'layer');
+      for (const id of layer) {
+        const t = byId.get(id);
+        const node = el('button', `task-node ${t.state.replace(' ', '-')}`);
+        node.type = 'button';
+        node.setAttribute('aria-pressed', 'false');
+        node.append(el('span', 'task-id', t.id), el('span', 'task-title', t.title), el('span', 'task-state', t.state), el('span', 'task-after', t.after.length ? `after ${t.after.join(', ')}` : 'starts first'));
+        node.addEventListener('click', () => select(t, node));
+        row.append(node);
+      }
+      graph.append(row);
+    });
+    const parallel = plan.layers.some((l) => l.length > 1);
+    box.append(graph, ...(parallel ? [el('p', 'note', 'Tasks side by side don’t wait for each other; Spark still runs them one at a time.')] : []), panel);
+    panel.append(el('p', 'none', 'Select a task to see its instructions, changes, check and timeline.'));
+    return box;
+  }
+
+  function taskDetail(t) {
+    const out = [el('h4', '', `${t.id} · ${t.title}`), el('p', 'task-do', t.do)];
+    const facts = el('ul', 'task-facts');
+    facts.append(el('li', '', `State: ${t.state}${t.attempts > 1 ? ` · ${t.attempts} attempts` : ''}`));
+    facts.append(el('li', '', t.after.length ? `Waits for ${t.after.join(', ')}` : 'Waits for nothing'));
+    facts.append(el('li', '', t.check ? `Check: ${t.check}` : 'No check: Spark takes Claude’s word for this task'));
+    const c = t.checkResult;
+    if (c) facts.append(el('li', c.status === 'pass' ? 'ok' : c.status === 'not-run' ? 'warn' : 'fail', `Result: ${c.status}${c.exit === undefined ? '' : ` (exit ${c.exit})`}${c.reason ? ` · ${c.reason}` : ''}`));
+    if (t.note) facts.append(el('li', 'warn', t.note));
+    out.push(facts);
+    if (t.files?.length) {
+      const files = el('ul', 'task-files');
+      for (const f of t.files) files.append(el('li', '', `${f.path} +${f.added} −${f.removed}`));
+      out.push(el('h5', '', 'Changed files'), files);
+    }
+    if (t.rows.length) {
+      const rows = el('ol', 'task-rows');
+      rows.append(...t.rows.map(rowNode));
+      out.push(el('h5', '', 'Timeline'), rows);
+    }
+    return out;
+  }
+
   async function show(id) {
     selected = id;
     const view = id ? await spark.missionView(id) : undefined;
@@ -137,7 +193,8 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
       timeline = el('ol');
       timeline.append(...view.rows.map(rowNode));
       log.append(timeline);
-      detail.replaceChildren(header(view), ...(view.sections ? [reportNode(view.sections)] : []), criteria, log);
+      const plan = view.plan ? [planNode(view.plan, view.mission.spec)] : [];
+      detail.replaceChildren(header(view), ...(view.sections ? [reportNode(view.sections)] : []), ...plan, criteria, log);
     }
     renderList();
   }

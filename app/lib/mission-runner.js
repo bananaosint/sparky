@@ -24,7 +24,7 @@ import {
   youRecord,
 } from '../staged/plugin/hooks/mission.ts';
 import { buildReport, describe, gitFacts, reportSections, totals } from '../staged/plugin/hooks/mission-report.ts';
-import { afterCheck, nextTask, retryText, taskStates, taskText } from '../staged/plugin/hooks/plan.ts';
+import { afterCheck, layers, nextTask, retryText, taskStates, taskText } from '../staged/plugin/hooks/plan.ts';
 import { numstat, pinSnapshot } from '../staged/plugin/hooks/snapshot.ts';
 
 // The id of the plan-mode request, so its refusal can be told apart from other control answers.
@@ -319,8 +319,25 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     view(id) {
       const found = store.read(id);
       if (!found) return undefined;
+      const { tasks } = found.mission;
+      // Each task with its state, and the timeline rows from its turns.
+      const plan = tasks?.length
+        ? (() => {
+            const states = taskStates(tasks, found.records, { over: FINAL.has(found.mission.status) });
+            return {
+              layers: layers(tasks),
+              tasks: tasks.map((t) => {
+                const v = states[t.id];
+                const within = found.records.filter((r) => v.from !== undefined && r.at >= v.from && r.at <= (v.to ?? Infinity));
+                const { check: checkResult, ...state } = v;
+                return { ...t, ...state, ...(checkResult ? { checkResult } : {}), rows: within.map(describe).filter(Boolean) };
+              }),
+            };
+          })()
+        : undefined;
       return {
         mission: found.mission,
+        ...(plan ? { plan } : {}),
         rows: found.records.map(describe).filter(Boolean),
         totals: totals(found.records),
         sections: found.report ? reportSections(found.report) : undefined,

@@ -600,6 +600,8 @@ function criteriaCard(mission) {
   const add = el('button', 'ghost', '+ criterion');
   add.type = 'button';
   add.addEventListener('click', () => addRow().focus());
+  const planNode = planEditor(mission);
+  if (/task plan was dropped/.test(mission.reason)) card.append(el('p', 'mission-warn', mission.reason.replace(/^.*?; /, 'The ')));
   const bar = el('div', 'buttons');
   const go = el('button', 'yes', 'Approve and start');
   const cancel = el('button', 'no', 'Cancel mission');
@@ -611,9 +613,11 @@ function criteriaCard(mission) {
   };
   go.addEventListener('click', async () => {
     const criteria = [...rows.children].map((li) => ({ text: li.children[0].value, how: li.children[1].value }));
-    const out = await spark.mission({ action: 'approve', id: mission.id, criteria });
+    const out = await spark.mission({ action: 'approve', id: mission.id, criteria, tasks: planNode?.tasks() ?? [] });
     if (out.error) return note(out.error);
-    settle('allowed', `Approved ${out.mission.criteria.length} criteria`);
+    planNode?.lock();
+    const n = out.mission.tasks?.length;
+    settle('allowed', `Approved ${out.mission.criteria.length} criteria${n ? ` and ${n} tasks` : ''}`);
     turnTools = 0;
     setBusy(true);
   });
@@ -623,8 +627,73 @@ function criteriaCard(mission) {
     settle('denied', 'Mission cancelled');
   });
   bar.append(go, cancel);
-  card.append(rows, add, bar);
+  card.append(rows, add, ...(planNode ? [planNode.node] : []), bar);
   return card;
+}
+
+// The drafted spec and tasks in the review card: each task's instructions and check can be
+// edited, a task removed (what waited for it then waits for what it waited for), or the plan
+// dropped. Main checks the result again.
+function planEditor(mission) {
+  if (!mission.spec && !mission.tasks?.length) return undefined;
+  const node = el('section', 'plan-editor');
+  if (mission.spec) {
+    node.append(el('h4', '', 'Spec'), el('p', 'spec', mission.spec));
+  }
+  if (!mission.tasks?.length) return { node, tasks: () => [], lock: () => {} };
+  let plan = mission.tasks.map((t) => ({ ...t }));
+  let whole = false;
+  const list = el('ol', 'tasks');
+  const waits = (t) => (t.after.length ? `after ${t.after.join(', ')}` : 'starts first');
+  function render() {
+    list.replaceChildren(
+      ...(plan.length < 2 ? [el('li', 'mission-note', 'With fewer than 2 tasks, the mission runs as one piece.')] : []),
+      ...plan.map((t) => {
+        const li = el('li', 'task-edit');
+        li.dataset.id = t.id;
+        const head = el('div', 'task-head');
+        head.append(el('span', 'task-id', t.id), el('span', 'task-title', t.title), el('span', 'task-after', waits(t)));
+        const x = el('button', 'remove', '×');
+        x.type = 'button';
+        x.title = `Remove task ${t.id}`;
+        x.setAttribute('aria-label', `Remove task ${t.id}`);
+        x.addEventListener('click', () => {
+          plan = plan.filter((p) => p.id !== t.id).map((p) => (p.after.includes(t.id) ? { ...p, after: plan.filter((q) => [...p.after.filter((a) => a !== t.id), ...t.after].includes(q.id)).map((q) => q.id) } : p));
+          render();
+        });
+        head.append(x);
+        const what = el('textarea');
+        what.value = t.do;
+        what.rows = 2;
+        what.setAttribute('aria-label', `Task ${t.id} instructions`);
+        what.addEventListener('input', () => (t.do = what.value));
+        const check = el('input', 'how');
+        check.value = t.check ?? '';
+        check.placeholder = 'a command that shows it is done, or leave empty';
+        check.setAttribute('aria-label', `Task ${t.id} check`);
+        check.addEventListener('input', () => (t.check = check.value));
+        li.append(head, what, check);
+        return li;
+      }),
+    );
+  }
+  render();
+  const one = el('button', 'ghost', 'Run as one piece');
+  one.type = 'button';
+  one.title = 'Drop the task plan: Claude does the whole mission in one go';
+  one.addEventListener('click', () => {
+    whole = !whole;
+    list.hidden = whole;
+    one.textContent = whole ? 'Use the task plan' : 'Run as one piece';
+  });
+  node.append(el('h4', '', `Tasks · Spark sends them one at a time and checks each`), list, one);
+  return {
+    node,
+    tasks: () => (whole ? [] : plan.map((t) => ({ id: t.id, do: t.do, check: t.check ?? '' }))),
+    lock: () => {
+      for (const n of node.querySelectorAll('input, textarea, button')) n.disabled = true;
+    },
+  };
 }
 
 spark.on('mission', (m) => {

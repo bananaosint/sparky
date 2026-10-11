@@ -2093,3 +2093,222 @@ button.link {
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg) 60%, transparent);
 }
+
+/* ---------- mission plans: the review card's tasks, the graph and the task panel ---------- */
+
+.plan-editor h4,
+.plan h3 {
+  margin: 8px 0;
+}
+
+.plan-editor .spec,
+.plan .spec {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  white-space: pre-wrap;
+  color: #b7c0d4;
+}
+
+.plan-editor .tasks {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-editor .task-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 24%, transparent);
+}
+
+.plan-editor .task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-editor .task-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.plan-editor textarea {
+  min-width: 0;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c3) 38%, transparent);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.task-id {
+  font: 600 12px 'Cascadia Code', Consolas, monospace;
+  color: #929db3;
+}
+
+.task-after {
+  font-size: 12px;
+  color: #929db3;
+}
+
+.plan-graph {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.plan-graph .layer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.plan-graph .layer-arrow {
+  text-align: center;
+  color: #7d879c;
+  line-height: 1;
+}
+
+.task-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  min-width: 0;
+  width: min(260px, 100%);
+  padding: 10px 12px;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 32%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.task-node:hover,
+.task-node[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--c1) 70%, transparent);
+}
+
+.task-node .task-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.task-node .task-state,
+.task-node .task-after {
+  grid-column: 2;
+  font-size: 12px;
+  color: #929db3;
+}
+
+.task-node.done .task-state {
+  color: #7ef0b8;
+}
+
+.task-node.failed .task-state {
+  color: #ff8a9c;
+}
+
+.task-node.running .task-state {
+  color: #ffce54;
+}
+
+.task-node.running {
+  border-color: color-mix(in srgb, #ffce54 55%, transparent);
+}
+
+.task-node.failed {
+  border-color: color-mix(in srgb, #ff8a9c 55%, transparent);
+}
+
+.task-node.not-reached {
+  opacity: 0.7;
+}
+
+.plan .note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: #929db3;
+}
+
+.task-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 24%, transparent);
+}
+
+.task-panel h4 {
+  margin: 0 0 8px;
+}
+
+.task-panel .task-do {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+.task-panel ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0 0 8px;
+}
+
+.task-panel li.ok {
+  color: #7ef0b8;
+}
+
+.task-panel li.fail {
+  color: #ff8a9c;
+}
+
+.task-panel li.warn {
+  color: #ffce54;
+}
+
+.task-panel .task-rows {
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.task-panel .task-rows .tl-row {
+  display: grid;
+  grid-template-columns: 72px 24px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 4px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-node {
+    transition: none;
+  }
+}
+
+.task-panel .task-rows .tl-row details {
+  grid-column: 3;
+}
+
+.task-panel .task-rows pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+}

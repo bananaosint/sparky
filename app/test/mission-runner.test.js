@@ -409,3 +409,17 @@ test('stop during a task, then Resume, sends that task again', async () => {
   t.r.resume(t.id, () => {});
   assert.match(t.texts().at(-1), /^Resuming mission: Rate-limit login[\s\S]*Do only task t2 \(Message\) now/);
 });
+
+test("the mission view carries the plan: tasks, their states from Spark's records, the layers, and each task's rows", async () => {
+  const t = await tasked();
+  t.r.onEvent(result('Added the limiter.'));
+  await t.r.idle();
+  const view = t.r.view(t.id);
+  assert.deepEqual(view.plan.layers, [['t1'], ['t2']]);
+  assert.deepEqual(view.plan.tasks.map((x) => [x.id, x.state]), [['t1', 'done'], ['t2', 'running']]);
+  assert.ok(view.plan.tasks[0].rows.some((row) => row.text === 'task t1 done · check passed'));
+  assert.equal(view.plan.tasks[0].check, 'npm test -- limiter');
+  assert.equal(view.plan.tasks[0].checkResult.status, 'pass');
+  const plain = rig();
+  assert.equal(plain.r.view(plain.r.start('plain').mission.id).plan, undefined);
+});
