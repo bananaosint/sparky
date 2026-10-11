@@ -173,7 +173,7 @@ export async function runCouncil({
       const missing = missingSections(t)
       return missing.length ? { error: `missing sections ${missing.join(', ')}`, fix: `missing these sections: ${missing.join(', ')}` } : { ok: t }
     })
-    return text === undefined ? undefined : { seatId: seat.candidate.id, family: seat.candidate.family, text }
+    return text === undefined ? undefined : { seatId: seat.candidate.id, name: seat.candidate.name, family: seat.candidate.family, text }
   })
   record.proposals = proposed.flatMap((p) => (p ? [{ seatId: p.seatId, text: p.text }] : []))
   if (signal.aborted) return finish('cancelled', 'you cancelled it')

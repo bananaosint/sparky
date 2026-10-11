@@ -66,17 +66,42 @@ const perMillion = (v: unknown) => {
   return Number.isFinite(n) ? Math.round(n * 1e6 * 1e6) / 1e6 : undefined
 }
 
+// One name per model family across providers: OpenRouter names the author (`meta-llama`,
+// `google`), Ollama the family with a version (`qwen3`, `gemma3`), Gemini `gemma` or `gemini`.
+const FAMILY: Record<string, string> = {
+  'meta-llama': 'llama',
+  meta: 'llama',
+  moonshotai: 'kimi',
+  moonshot: 'kimi',
+  'z-ai': 'glm',
+  zhipu: 'glm',
+  thudm: 'glm',
+  'x-ai': 'grok',
+  xai: 'grok',
+  mistralai: 'mistral',
+  mixtral: 'mistral',
+  codestral: 'mistral',
+  'deepseek-ai': 'deepseek',
+  qwq: 'qwen',
+}
+export function familyOf(raw: string, id: string) {
+  const f = raw.toLowerCase().replace(/[\d.]+$/, '')
+  if (f === 'google') return /gemma/i.test(id) ? 'gemma' : 'gemini'
+  return FAMILY[f] ?? f
+}
+
 // GET https://openrouter.ai/api/v1/models. Text-in, text-out single models only: routers and
 // Claude (which runs on the person's plan instead) are left out.
 export function normalizeOpenRouter(json: unknown): Candidate[] {
   return list(obj(json).data).flatMap((raw): Candidate[] => {
     const m = obj(raw)
     const id = typeof m.id === 'string' ? m.id : ''
-    const family = id.split('/')[0] ?? ''
+    const author = id.split('/')[0] ?? ''
     const arch = obj(m.architecture)
     const textIn = list(arch.input_modalities).includes('text')
     const textOut = list(arch.output_modalities).includes('text')
-    if (!id.includes('/') || !textIn || !textOut || family === 'openrouter' || family === 'anthropic') return []
+    if (!id.includes('/') || !textIn || !textOut || author === 'openrouter' || author === 'anthropic') return []
+    const family = familyOf(author, id)
     const pricing = obj(m.pricing)
     const priceIn = perMillion(pricing.prompt)
     const priceOut = perMillion(pricing.completion)
@@ -140,7 +165,7 @@ export function normalizeOllama(json: unknown): Candidate[] {
     const id = typeof m.name === 'string' ? m.name : ''
     const size = billions(obj(m.details).parameter_size)
     if (!id || /[:-]cloud$/i.test(id) || (size !== undefined && size < 7)) return []
-    const family = typeof obj(m.details).family === 'string' ? String(obj(m.details).family) : id.split(':')[0]!
+    const family = familyOf(typeof obj(m.details).family === 'string' ? String(obj(m.details).family) : id.split(':')[0]!, id)
     return [{ id, provider: 'ollama', name: id, family, access: 'local', openWeights: true }]
   })
 }
@@ -441,11 +466,25 @@ export function parseVerdict(text: string, letters: readonly string[]): Verdict 
 
 const NAMES = /\b(claude|anthropic|opus|sonnet|fable|haiku|gemini|gemma|google|openai|chatgpt|gpt[-\w.]*|deepseek[-\w.]*|qwen[-\w.]*|qwq|llama[-\w.]*|mistral|mixtral|codestral|kimi|moonshot|glm[-\w.]*|zhipu|grok|xai|nemotron|nvidia|cohere)\b/gi
 
+// A model's own first word is stripped only when it isn't an ordinary word too (Cohere's Command).
+const ORDINARY = new Set(['command', 'nova', 'mercury', 'free', 'pro', 'mini', 'large', 'small', 'medium', 'chat', 'instruct', 'base', 'coder', 'code', 'reasoning', 'latest', 'turbo', 'flash', 'lite', 'preview'])
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// How a proposer may name itself: its id's model part, its display name with and without the
+// vendor, and the model part's first word with any version after it ("Phi-4", "Hermes 4").
+function selfNames(p: { seatId: string; name?: string; family: string }) {
+  const segment = (p.seatId.split('/').pop() ?? '').replace(/:.*$/, '')
+  const brand = segment.split(/[-_.\s]/)[0] ?? ''
+  const names = [segment, p.name ?? '', (p.name ?? '').replace(/^[^:]*:\s*/, ''), p.family.replace(/[^\w-]/g, '')].filter((s) => s.length > 2).map(escape)
+  if (brand.length > 2 && /[a-z]/i.test(brand) && !ORDINARY.has(brand.toLowerCase())) names.push(`${escape(brand)}(?:[-\\s]?\\d+(?:\\.\\d+)*\\w*)*`)
+  return names
+}
+
 // Proposals become letters in shuffled order; model and vendor names in the text become
 // "[model]". The mapping stays with the run for the audit after synthesis.
-export function blind(proposals: readonly { seatId: string; family: string; text: string }[], shuffle: (n: number) => number[]) {
-  const families = [...new Set(proposals.map((p) => p.family.replace(/[^\w-]/g, '')))].filter((f) => f.length > 2)
-  const ownNames = families.length ? new RegExp(`\\b(${families.join('|')})\\b`, 'gi') : undefined
+export function blind(proposals: readonly { seatId: string; name?: string; family: string; text: string }[], shuffle: (n: number) => number[]) {
+  const own = [...new Set(proposals.flatMap(selfNames))].sort((a, b) => b.length - a.length)
+  const ownNames = own.length ? new RegExp(`\\b(${own.join('|')})(?![\\w])`, 'gi') : undefined
   const mapping: Record<string, string> = {}
   const packets = shuffle(proposals.length).map((i, n) => {
     const letter = String.fromCharCode(65 + n)

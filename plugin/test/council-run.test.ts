@@ -92,6 +92,14 @@ test('proposals, then blind judging, then synthesis; judges never see a model na
   expect(record.synthesis).toContain('## Decision')
 })
 
+test("a proposer that signs with its display name is unsigned before any judge reads it", async () => {
+  const named = [...CLAUDE_CANDIDATES, ...pool.slice(CLAUDE_CANDIDATES.length).map((c) => (c.id === 'z-ai/m' ? { ...c, name: 'Zebra Ultra' } : c))]
+  const r = rig('light', (s) => (s.seat === 'z-ai/m' && s.role === 'proposer' ? SECTIONS.map((x) => `## ${x}\nZebra Ultra says use an LRU.`).join('\n') : undefined))
+  const record = await run({ ...r, panel: pickCouncil(named, 'light', { briefChars: 1000 }) }, 'light')
+  expect(record.status).toBe('done')
+  for (const j of r.seen.filter((s) => s.role === 'judge')) expect(j.req.user).not.toContain('Zebra Ultra')
+})
+
 test('at most 4 calls run at once', async () => {
   const r = rig('full')
   await run(r, 'full')

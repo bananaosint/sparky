@@ -60,6 +60,22 @@ test('blind packets: letters from the shuffle, model and vendor names stripped, 
   expect(out.packets[1]!.text).toBe('As [model] [model], I suggest a write-through cache.')
 })
 
+test("blind packets strip each proposer's own model name, not only the known vendors, and leave ordinary words", () => {
+  const out = blind(
+    [
+      { seatId: 'microsoft/phi-4-reasoning', name: 'Microsoft: Phi 4 Reasoning', family: 'microsoft', text: 'I am Phi-4. Phi recommends sharding; reasoning matters here.' },
+      { seatId: 'nousresearch/hermes-4-405b', name: 'Nous: Hermes 4 405B', family: 'nousresearch', text: 'Hermes 4 405B says: use a queue.' },
+      { seatId: 'cohere/command-r-plus', name: 'Cohere: Command R+', family: 'cohere', text: 'Run the command once; command-r-plus prefers a queue.' },
+    ],
+    () => [0, 1, 2],
+  )
+  expect(out.packets.map((p) => p.text)).toEqual([
+    'I am [model]. [model] recommends sharding; reasoning matters here.',
+    '[model] says: use a queue.',
+    'Run the command once; [model] prefers a queue.',
+  ])
+})
+
 test('aggregate: Spark computes the weighted totals; a proposal leading every judge dominates', () => {
   const v1 = verdict({ scores: { A: full({ all: 9 }), B: full({ all: 6 }), C: full({ all: 5 }) }, rank: ['A', 'B', 'C'] })
   const v2 = verdict({ scores: { A: full({ all: 8 }), B: full({ all: 7 }), C: full({ all: 4 }) }, rank: ['A', 'B', 'C'] })

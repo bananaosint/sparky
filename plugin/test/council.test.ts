@@ -59,7 +59,18 @@ test('gemini and ollama catalogs become candidates', () => {
     ['gemma-4-31b-it', 'gemma', 'gemini-key', true],
   ])
   const local = normalizeOllama({ models: [{ name: 'qwen3:32b', details: { family: 'qwen3' } }] })
-  expect(local).toEqual([{ id: 'qwen3:32b', provider: 'ollama', name: 'qwen3:32b', family: 'qwen3', access: 'local', openWeights: true }])
+  expect(local).toEqual([{ id: 'qwen3:32b', provider: 'ollama', name: 'qwen3:32b', family: 'qwen', access: 'local', openWeights: true }])
+})
+
+test('a family is one name across providers, so a judge never shares a proposer family unlabelled', () => {
+  const hosted = normalizeOpenRouter({
+    data: ['qwen/qwen3-32b', 'meta-llama/llama-4-maverick', 'google/gemma-3-27b-it:free', 'google/gemini-3-pro', 'moonshotai/kimi-k3', 'mistralai/devstral-2', 'x-ai/grok-5', 'z-ai/glm-5'].map((id) => orModel(id)),
+  })
+  expect(hosted.map((c) => c.family)).toEqual(['qwen', 'llama', 'gemma', 'gemini', 'kimi', 'mistral', 'grok', 'glm'])
+  const local = normalizeOllama({ models: [{ name: 'qwen3:32b', details: { family: 'qwen3' } }, { name: 'llama4:70b', details: { family: 'llama' } }, { name: 'gemma3:27b', details: { family: 'gemma3' } }] })
+  expect(local.map((c) => c.family)).toEqual(['qwen', 'llama', 'gemma'])
+  const panel = pickCouncil([...CLAUDE_CANDIDATES, ...hosted.filter((c) => c.family === 'qwen'), ...local.filter((c) => c.family === 'qwen')], 'light', { briefChars: 1000 })
+  for (const judge of panel.judges.filter((j) => j.candidate.family === 'qwen')) expect(judge.reason).toContain('same family as a proposer')
 })
 
 test('full: Opus, Sonnet and Fable plus five discovered proposers, one per family, best coding index first', () => {
