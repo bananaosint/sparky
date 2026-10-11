@@ -159,3 +159,13 @@ test('drafts only read', () => {
   for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'ExitPlanMode']) expect(DRAFT_DENIED.has(tool)).toBe(true)
   for (const tool of ['Read', 'Grep', 'Glob']) expect(DRAFT_DENIED.has(tool)).toBe(false)
 })
+
+test('a mission from a council plan starts in review with its criteria, and its run text carries the plan', () => {
+  const criteria = [{ text: 'p95 under 50 ms', how: 'npm run bench', by: 'claude' as const }]
+  const { mission: m, record } = newMission('speed up the cache', AT, 'beef', 0, { criteria, plan: '## Decision\nhybrid of A and C' })
+  expect(m).toMatchObject({ status: 'review', reason: 'criteria from Council', criteria, plan: '## Decision\nhybrid of A and C' })
+  expect(record).toMatchObject({ kind: 'status', to: 'review' })
+  expect(runText(m)).toContain('Plan (from Council):\n## Decision\nhybrid of A and C')
+  expect(asMission({ ...m, plan: 'x'.repeat(30_000) })!.plan!.length).toBeLessThanOrEqual(20_001)
+  expect(asMission({ ...m, plan: 42 })!.plan).toBeUndefined()
+})

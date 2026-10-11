@@ -23,6 +23,8 @@ export type Mission = {
   endSha?: string
   // How much of .spark/gate.jsonl was there already or has been read: only later lines count.
   gateOffset: number
+  // A Council synthesis the mission started from; the run text carries it.
+  plan?: string
 }
 export type Decision = 'allowed' | 'always' | 'denied' | 'auto-allowed' | 'auto-denied'
 export type GateCheck = 'tests' | 'build' | 'halt'
@@ -84,11 +86,34 @@ const clean = (s: unknown, n: number) => clip(redact(String(s ?? '')).text, n)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
 
-export function newMission(objective: string, at: number, hex4: string, gateOffset: number): { mission: Mission; record: MissionRecord } {
+const PLAN_CHARS = 20_000
+
+// A mission drafts its own criteria, unless it comes from a Council plan that already has them:
+// then it starts in review.
+export function newMission(
+  objective: string,
+  at: number,
+  hex4: string,
+  gateOffset: number,
+  { criteria = [], plan }: { criteria?: Criterion[]; plan?: string } = {},
+): { mission: Mission; record: MissionRecord } {
   const text = objective.trim()
+  const planned = criteria.length > 0
+  const status: Status = planned ? 'review' : 'draft'
+  const reason = planned ? 'criteria from Council' : 'drafting criteria'
   return {
-    mission: { id: missionId(at, hex4), title: clean(text, 80), objective: clean(text, 4000), criteria: [], status: 'draft', reason: 'drafting criteria', createdAt: at, gateOffset },
-    record: { at, kind: 'status', to: 'draft', reason: 'mission created' },
+    mission: {
+      id: missionId(at, hex4),
+      title: clean(text, 80),
+      objective: clean(text, 4000),
+      criteria: criteria.map((c) => ({ text: clean(c.text, 500), how: clean(c.how, 300) || 'manual', by: c.by })),
+      status,
+      reason,
+      createdAt: at,
+      gateOffset,
+      ...(plan ? { plan: clean(plan, PLAN_CHARS) } : {}),
+    },
+    record: { at, kind: 'status', to: status, reason: planned ? reason : 'mission created' },
   }
 }
 
@@ -242,6 +267,7 @@ export const runText = (m: Mission) =>
     '',
     'Acceptance criteria (approved):',
     ...listed(m),
+    ...(m.plan ? ['', 'Plan (from Council):', m.plan] : []),
     '',
     'Do the work until every criterion is met, or until you are blocked and need me. When you finish, end with what you changed, the commands you ran and their results, and for each criterion whether you believe it is met and why. Spark records what actually happened and reports it next to your account.',
   ].join('\n')
@@ -331,6 +357,7 @@ export function asMission(j: unknown): Mission | undefined {
     model: str(m.model),
     startSha: sha(m.startSha),
     endSha: sha(m.endSha),
+    plan: typeof m.plan === 'string' ? clip(m.plan, PLAN_CHARS) : undefined,
   }
   for (const [key, value] of Object.entries(optional)) if (value !== undefined) Object.assign(mission, { [key]: value })
   return mission

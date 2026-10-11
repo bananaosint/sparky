@@ -231,3 +231,14 @@ test('review fixes: recover keeps going past a mission it cannot save', async ()
   const other = store.list().find((m) => m.id !== stuck);
   assert.equal(other.status, 'interrupted');
 });
+
+test('a mission from a council plan goes straight to review, and approving it sends the plan', async () => {
+  const t = rig();
+  const out = t.r.fromPlan('speed up the cache', [{ text: 'p95 under 50 ms', how: 'npm run bench', by: 'claude' }], '## Decision\nhybrid', { sessionId: SESSION });
+  assert.equal(out.mission.status, 'review');
+  assert.deepEqual(t.lines, []);
+  assert.equal(t.told.filter((x) => x.kind === 'review').length, 1);
+  await t.r.approve(out.mission.id, [{ text: 'p95 under 50 ms', how: 'npm run bench' }]);
+  assert.match(t.texts().at(-1), /Plan \(from Council\):\n## Decision\nhybrid/);
+  assert.match(t.r.fromPlan('again', [], 'p').error, /cancel it first/);
+});

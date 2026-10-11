@@ -111,6 +111,17 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
       return { mission: active };
     },
 
+    // A Council synthesis becomes a mission straight in review: its criteria are already drafted.
+    fromPlan(objective, criteria, plan, { sessionId } = {}) {
+      if (active) return { error: `mission "${active.title}" is ${active.status}: cancel it first` };
+      if (!criteria.length) return { error: 'the council plan has no acceptance criteria to start from' };
+      const { mission, record: first } = newMission(objective, now(), hex4(), store.gateSize(), { criteria, plan });
+      active = { ...mission, ...(isSessionId(sessionId) ? { sessionId } : {}) };
+      commit(active, [first]);
+      notify({ kind: 'review', mission: active });
+      return { mission: active };
+    },
+
     onEvent(event) {
       if (!active) return;
       if (event.kind === 'init' && (event.sessionId !== active.sessionId || event.model !== active.model))
