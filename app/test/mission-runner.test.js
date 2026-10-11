@@ -465,3 +465,23 @@ test("an edited plan that doesn't hold together is refused with the reason; the 
   assert.equal(out.error, 'task t1 has no title or instructions');
   assert.equal(t.store.read(mission.id).mission.status, 'review');
 });
+
+test("while a task's check runs, Resume waits for it and the window hears what Spark is doing", async () => {
+  let release = () => {};
+  const seen = [];
+  const t = rig({ checkTask: (m, task, attempt) => (seen.push(`${task.id}#${attempt}`), new Promise((r) => (release = () => r({ name: `task ${task.id}`, status: 'pass', exit: 0 })))) });
+  const { mission } = t.r.start('rate-limit the login route');
+  t.r.onEvent(result(PLANNED));
+  await t.r.approve(mission.id, [{ text: 'A sixth failed login gets 429', how: 'npm test' }]);
+  t.r.onEvent(result('Added the limiter.'));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(t.told.some((x) => x.kind === 'checking' && x.id === mission.id && x.task === 't1'));
+  t.r.stopped();
+  assert.match(t.r.resume(mission.id, () => {}).error, /Spark is still checking task t1/);
+  release();
+  await t.r.idle();
+  assert.deepEqual(seen, ['t1#1']);
+  assert.equal(t.store.read(mission.id).mission.status, 'paused');
+  t.r.resume(mission.id, () => {});
+  assert.match(t.texts().at(-1), /Do only task t2 \(Message\) now/);
+});

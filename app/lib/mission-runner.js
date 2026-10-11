@@ -46,6 +46,9 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
   // pass would change the tree under them.
   let checking = 0;
   const CHECKING = 'Spark is running its checks: wait for the report';
+  // The task whose turn just ended, while Spark records it and runs its check: Resume would send
+  // it again under the check's feet.
+  let taskBusy = null;
 
   function record(mission, records) {
     for (const r of records) {
@@ -137,6 +140,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
     const base = records.filter((r) => r.kind === 'task' && r.id === current.id && r.event === 'started').at(-1)?.base;
     const end = await pin(m, `task-${current.id}-${attempt}`);
     const files = SHA.test(base ?? '') && end ? await numstat(run, base, end).catch(() => undefined) : undefined;
+    if (current.check && checkTask) notify({ kind: 'checking', id: m.id, task: current.id });
     const check = current.check && checkTask ? await checkTask(m, current, attempt).catch((err) => ({ name: `task ${current.id}`, status: 'fail', reason: err.message })) : undefined;
     const decision = afterCheck(current, attempt, check);
     record(m, [
@@ -176,8 +180,16 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
       notify({ kind: 'review', mission: done.mission });
     }
     if (FINAL.has(done.mission.status)) later(done.mission);
-    else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length)
-      queue = queue.then(() => taskTurnEnded(done.mission)).catch((err) => notify({ kind: 'error', id: m.id, error: err.message }));
+    else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length) {
+      const states = taskStates(done.mission.tasks, store.read(m.id).records, { over: false });
+      taskBusy = done.mission.tasks.find((t) => states[t.id].state === 'running')?.id ?? 'the last one';
+      queue = queue
+        .then(() => taskTurnEnded(done.mission))
+        .catch((err) => notify({ kind: 'error', id: m.id, error: err.message }))
+        .finally(() => {
+          taskBusy = null;
+        });
+    }
   }
 
   function interrupted(reason, { detach = false } = {}) {
@@ -293,6 +305,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
       const found = store.read(id);
       const m = active?.id === id ? active : found?.mission;
       if (!m || (m.status !== 'paused' && m.status !== 'interrupted')) return { error: 'only a paused or interrupted mission resumes' };
+      if (taskBusy && active?.id === id) return { error: `Spark is still checking task ${taskBusy}: Resume once it is done` };
       const fresh = !isSessionId(m.sessionId) || resumeFailed(found?.records ?? []);
       active = m;
       restart(fresh ? undefined : m.sessionId);
