@@ -77,10 +77,18 @@ What it doesn't cover: time spent waiting on a permission card counts, so turn o
   - what you allowed and denied
   - the time and cost Claude Code reported
 
-  Spark doesn't check the criteria themselves yet: each one says "not checked by Spark", or "needs you" if it's manual. Claude's own summary is shown beside the report and marked unverified.
+  Claude's own summary is shown beside the report and marked unverified.
+- **Spark's checks:** when a mission finishes or is blocked, Spark runs the checks itself before the report, one at a time, through `cmd`, 5 minutes each:
+  - the tests, as the test gate picks them
+  - `typecheck` (or `check`), `lint` and `build`, when package.json has those scripts
+  - each criterion whose check is a command (`npm test -- auth`, `cargo test lockout`)
+
+  Your own commands in Spark's config (`repos[<path>].test`, `.typecheck`, `.lint`, `.build`) win over the scripts. In an untrusted folder, only those run. A script that changed during the mission doesn't run, and neither does a criterion that runs it. Without a start snapshot (no git repo), Spark can't tell what changed, so the folder's scripts don't run. A command the gate would ask about (installs, network, deletes) doesn't run either. `npx` never counts as a command.
+
+  The report opens with **Proof of completion**: each check with pass, fail, timed out or not run with the reason, and its redacted log under `.spark/missions/<id>/checks/`. Criteria read passed, failed, not run or needs you. The status gets a verdict from these checks alone: **Verified**, **Needs review** (something didn't run, or a criterion needs a person), **Checks failed** or **Not verified** (nothing could run). Verified means only that these checks passed. Spark doesn't judge whether a test really tests what its criterion says. **Check again** runs them again on the working tree as it is now.
 - **Stopping:** ■ pauses a mission, and Resume carries on in the same session. Closing Spark, New chat or another folder interrupts it, and Resume picks it up later. If the session can't be resumed, the next Resume starts a fresh one.
 - **One at a time:** a mission and a marathon don't run together, and missions need Claude Code (not Gemini or Auto).
-- **In the terminal:** `/mission <objective>` fills the prompt box with the draft request; `/mission approve` fills it with the run request; `/mission cancel` ends it; `/mission` opens the pane. The terminal can't see costs or your permission answers, has no criteria editor and no Resume.
+- **In the terminal:** `/mission <objective>` fills the prompt box with the draft request; `/mission approve` fills it with the run request; `/mission cancel` ends it; `/mission` opens the pane. The terminal can't see costs or your permission answers, has no criteria editor, no Resume and no Check again. It runs Spark's checks when a mission ends, as the app does.
 
 ## Council
 
