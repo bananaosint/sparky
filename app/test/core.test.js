@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLine, userMessage, setModel } from '../lib/stream.js';
+import { parseLine, userMessage, setModel, setPermissionMode } from '../lib/stream.js';
 import { handleMcp } from '../bridge/mcp.js';
 import { cookPrompt } from '../lib/cook.js';
 
@@ -79,4 +79,8 @@ test('cooking rewrites through the model chain, retrying a failing model before 
 
 test('a refused key stops cooking at once', async () => {
   await assert.rejects(cookPrompt('add dark mode', { key: 'bad', rewriteModels: ['a', 'b'], pickSkills: false, fetchImpl: async () => ({ ok: false, status: 403 }) }), /refused the key/);
+});
+
+test('setPermissionMode is a control request Claude Code answers by id', () => {
+  assert.deepEqual(JSON.parse(setPermissionMode('mission-plan', 'plan')), { type: 'control_request', request_id: 'mission-plan', request: { subtype: 'set_permission_mode', mode: 'plan' } });
 });
