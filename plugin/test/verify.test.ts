@@ -85,13 +85,29 @@ test("a criterion that runs a changed script is not run either; with no start sn
   ])
 })
 
+test("a criterion with cmd's operators outside double quotes is not run: cmd reads them, the gate doesn't", () => {
+  const plan = (how: string) => planChecks({ ...base, files: [], criteria: [crit('x', how)] }).find((p) => p.criterion === 0)!
+  for (const how of [
+    'node -e "1" & cu^rl --version',
+    'node -e "1" & r^d /s /q C:\\x',
+    "node -e 'x | hostname'",
+    'npm test -- %TEMP%',
+    'npm test > src/auth.js',
+    'npm test\necho second',
+    'node -e "a\\" & calc & "',
+    'node -e "unclosed',
+  ])
+    expect([how, plan(how).reason]).toEqual([how, "it uses cmd's operators (& | < > ^ % ' and line breaks), which Spark won't run"])
+  for (const how of ['npm test -- --grep "login limit"', 'node -e "console.log(42)"', 'cargo test lockout']) expect(plan(how).command).toBe(how)
+})
+
 test('criterion commands run unless the gate would ask; manual criteria are not planned', () => {
   const classify = (c: string) => (c.includes('install') ? { kind: 'ask' as const, reason: 'package install' } : undefined)
   const plan = planChecks({
     ...base,
     classify,
     files: [],
-    criteria: [crit('sixth login gets 429', 'npm test -- auth'), crit('reads well', 'manual'), crit('deps ok', 'npm install && npm test')],
+    criteria: [crit('sixth login gets 429', 'npm test -- auth'), crit('reads well', 'manual'), crit('deps ok', 'npm install express')],
   })
   expect(plan.filter((p) => p.criterion !== undefined).map((p) => [p.criterion, p.command ?? `not run: ${p.reason}`])).toEqual([
     [0, 'npm test -- auth'],

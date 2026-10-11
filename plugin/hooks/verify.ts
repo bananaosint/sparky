@@ -14,6 +14,20 @@ const RUNNERS: ReadonlySet<string> = new Set(['npm', 'pnpm', 'yarn', 'bun', 'nod
 export const isCommandHow = (how: string) => RUNNERS.has(how.trim().split(/\s+/)[0]?.toLowerCase() ?? '')
 
 const UNTRUSTED = 'the folder is untrusted; only your own configured commands run'
+const CMD_OPERATORS = "it uses cmd's operators (& | < > ^ % ' and line breaks), which Spark won't run"
+
+// Checks run through cmd, which reads & | < > ^ ( ) outside double quotes, expands % anywhere,
+// stops at a line break and has no \" escape; the gate reads a command as a POSIX shell would. A
+// criterion with any of them isn't run, so the two readings can't differ.
+export function cmdSafe(command: string) {
+  if (/[\r\n%]/.test(command)) return false
+  let quoted = false
+  for (const ch of command) {
+    if (ch === '"') quoted = !quoted
+    else if (!quoted && /[&|<>^()'`$;!]/.test(ch)) return false
+  }
+  return !quoted
+}
 
 // The package.json script a command line runs, if any: `npm test`, `pnpm run e2e`, `yarn lint`.
 // Over-matching only makes Spark more careful. `bun test` is bun's own runner, not a script.
@@ -116,6 +130,7 @@ export function planChecks(a: {
     if (!a.trusted) return plan.push({ name, criterion: i, reason: UNTRUSTED })
     const script = changed(scriptOf(c.how))
     if (script) return plan.push({ name, criterion: i, reason: script })
+    if (!cmdSafe(c.how.trim())) return plan.push({ name, criterion: i, reason: CMD_OPERATORS })
     const gate = a.classify(c.how)
     if (gate) return plan.push({ name, criterion: i, reason: `the gate would ${gate.kind === 'deny' ? 'block it' : 'ask'}: ${gate.reason.replace(/^✦ spark gate: (blocked: )?/, '')}` })
     plan.push({ name, criterion: i, command: c.how.trim() })
