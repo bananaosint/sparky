@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { afterCheck, layers, nextTask, removeTask, retryText, taskStates, taskText, validatePlan } from '../hooks/plan'
+import { afterCheck, layers, nextTask, readyTasks, removeTask, retryText, taskStates, taskText, validatePlan } from '../hooks/plan'
 import type { Task, TaskRecord } from '../hooks/plan'
 
 const raw = [
@@ -77,4 +77,16 @@ test("after a task's check: pass, no check or a check that didn't run is done; a
   expect(afterCheck(t2, 1, { name: 'task t2', status: 'not-run', reason: 'the folder is untrusted' })).toEqual({ event: 'done', note: 'check not run: the folder is untrusted' })
   expect(afterCheck(t2, 1, { name: 'task t2', status: 'fail', exit: 1 })).toEqual({ event: 'retry' })
   expect(afterCheck(t2, 2, { name: 'task t2', status: 'timed-out' })).toEqual({ event: 'failed', note: "task t2's check failed twice" })
+})
+
+test('parallel: every task whose dependencies are done is ready; a stopped or collided task waits to run again', () => {
+  const t1done = [rec(1, 't1', 'started'), rec(2, 't1', 'done')]
+  expect(readyTasks(tasks, taskStates(tasks, t1done, { over: false })).map((t) => t.id)).toEqual(['t2', 't3'])
+  const layer = [...t1done, rec(3, 't2', 'started'), rec(3, 't3', 'started'), rec(4, 't2', 'done'), rec(5, 't3', 'collided', 1, { note: 'collided with t2: src/auth.js' })]
+  const states = taskStates(tasks, layer, { over: false })
+  expect([states.t3!.state, states.t3!.note]).toEqual(['queued', 'collided with t2: src/auth.js'])
+  expect(nextTask(tasks, states)?.id).toBe('t3')
+  const stopped = taskStates(tasks, [...t1done, rec(3, 't2', 'started'), rec(4, 't2', 'stopped')], { over: false })
+  expect(stopped.t2!.state).toBe('queued')
+  expect(readyTasks(tasks, stopped).map((t) => t.id)).toEqual(['t2', 't3'])
 })

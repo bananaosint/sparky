@@ -407,7 +407,7 @@ export function resumeFailed(records: readonly MissionRecord[]) {
 }
 
 const KINDS: ReadonlySet<string> = new Set(['status', 'you', 'tool', 'tool-result', 'permission', 'turn', 'gate', 'model', 'process', 'verify', 'check', 'task'])
-const TASK_EVENTS: ReadonlySet<string> = new Set(['started', 'retry', 'done', 'failed'])
+const TASK_EVENTS: ReadonlySet<string> = new Set(['started', 'retry', 'done', 'failed', 'stopped', 'collided'])
 // A check record's status feeds the verdict, so an unknown one is not let through.
 const CHECK_STATUSES: ReadonlySet<string> = new Set(['pass', 'fail', 'timed-out', 'not-run'])
 

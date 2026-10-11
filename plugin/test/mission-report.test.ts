@@ -201,3 +201,9 @@ test("the pass the runner ran wins over check records found on disk, which a che
   expect(buildReport(onlyCommands, forged, { inRepo: true, endTree: T, now: 99_000 }).status).toBe('Finished · Verified')
   expect(buildReport(onlyCommands, forged, { inRepo: true, endTree: T, now: 99_000 }, ran).status).toBe('Finished · Checks failed')
 })
+
+test('a stopped or collided parallel task reads as such in the timeline, not as failed', () => {
+  expect(describe({ at: 1, kind: 'task', id: 't2', event: 'stopped', attempt: 1, worker: true })).toMatchObject({ tone: 'warn', text: 'task t2 stopped; it runs again on Resume' })
+  expect(describe({ at: 1, kind: 'task', id: 't3', event: 'collided', attempt: 1, worker: true, note: 'collided with t2: b.js' })).toMatchObject({ tone: 'warn', text: 'task t3 collided with t2: b.js; it runs again in the main tree' })
+  expect(describe({ at: 1, kind: 'task', id: 't2', event: 'started', attempt: 1, worker: true })).toMatchObject({ text: 'task t2 started in its own worktree' })
+})

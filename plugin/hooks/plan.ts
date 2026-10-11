@@ -5,10 +5,13 @@ import { isCommandHow } from './verify.ts'
 import type { CheckResult } from './verify.ts'
 
 export type Task = { id: string; title: string; do: string; after: string[]; check?: string }
-export type TaskEvent = 'started' | 'retry' | 'done' | 'failed'
+// `stopped`: ■ during a parallel layer; `collided`: a worker's changes didn't apply. Both put the
+// task back in the queue, to run again.
+export type TaskEvent = 'started' | 'retry' | 'done' | 'failed' | 'stopped' | 'collided'
 export type FileStat = { path: string; added: number; removed: number }
-// `base`: the snapshot the task started from, for its changed files.
-export type TaskRecord = { at: number; kind: 'task'; id: string; event: TaskEvent; attempt: number; base?: string; files?: FileStat[]; check?: CheckResult; note?: string }
+// `base`: the snapshot the task started from, for its changed files. `worker`: it ran in its own
+// worktree, at the same time as others.
+export type TaskRecord = { at: number; kind: 'task'; id: string; event: TaskEvent; attempt: number; base?: string; files?: FileStat[]; check?: CheckResult; note?: string; worker?: boolean }
 export type TaskState = 'queued' | 'running' | 'done' | 'failed' | 'not reached'
 export type TaskView = { state: TaskState; attempts: number; files?: FileStat[]; check?: CheckResult; note?: string; from?: number; to?: number }
 
@@ -69,6 +72,10 @@ export function taskStates(tasks: readonly Task[], records: readonly { kind: str
     v.attempts = Math.max(v.attempts, Number(t.attempt) || 1)
     if (t.event === 'started') Object.assign(v, { state: 'running', from: t.at })
     if (t.event === 'retry') v.state = 'running'
+    if (t.event === 'stopped' || t.event === 'collided') {
+      v.state = 'queued'
+      if (t.note) v.note = t.note
+    }
     if (t.event === 'done' || t.event === 'failed') {
       Object.assign(v, { state: t.event, to: t.at })
       if (t.files) v.files = t.files
@@ -85,6 +92,11 @@ export function nextTask(tasks: readonly Task[], states: Record<string, TaskView
   if (tasks.some((t) => states[t.id]?.state === 'running' || states[t.id]?.state === 'failed')) return undefined
   return tasks.find((t) => states[t.id]?.state === 'queued' && t.after.every((a) => states[a]?.state === 'done'))
 }
+
+// Every task that could start now: not started, its dependencies all done. Parallel layers run
+// these together; one at a time, nextTask takes the first.
+export const readyTasks = (tasks: readonly Task[], states: Record<string, TaskView>) =>
+  tasks.filter((t) => states[t.id]?.state === 'queued' && t.after.every((a) => states[a]?.state === 'done'))
 
 // What a task's turn comes to once Spark has run its check. One retry, then the task fails.
 export function afterCheck(t: Task, attempt: number, check?: Partial<CheckResult>): { event: 'done' | 'retry' | 'failed'; note?: string } {
