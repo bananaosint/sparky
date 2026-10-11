@@ -153,7 +153,7 @@ Every text field passes through `redact()` (`plugin/hooks/redact.ts`) before it 
 | A crafted `sessionId` in `mission.json` | Odd arguments passed to `claude` | It must be a UUID, or Resume starts a fresh session. `spawn` takes an argument array, with no shell. |
 | Claude appends a fake passing line to `gate.jsonl` | The report claims tests passed | Edits under `.spark/` are denied, and commands naming the file are blocked. The gate reads text, so an obfuscated command can still get through (see Not covered). |
 | Secrets in commands, tool output or messages | Secrets kept on disk in `.spark/` | `redact()` runs on every text field. Only error tails are kept, never full output. |
-| A draft turn that writes anyway | Changes before approval | Plan mode plus bridge denials. The start snapshot is taken at approval, so the report shows any changes made earlier. |
+| A draft turn that writes anyway | Changes before approval | Plan mode plus bridge denials. Changes made before approval fall inside the start snapshot, so they show only as tool records in the timeline, not under Changed files. |
 
 ## Not covered
 
@@ -164,6 +164,8 @@ Every text field passes through `redact()` (`plugin/hooks/redact.ts`) before it 
 - Missions are per folder; there is no cross-project list.
 - Terminal missions have no cost, token or permission records, no criteria editor, and no Resume.
 - Time spent on a permission card counts toward the elapsed time.
+- The end snapshot is taken just after the last turn. A chat message queued right behind it can change files before the snapshot runs. The report then errs to "tests not run on the final code".
+- Test-gate runs from chat turns while the criteria wait for approval count toward the mission's Checks.
 
 ## Tests
 
