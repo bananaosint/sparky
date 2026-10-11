@@ -323,7 +323,7 @@ ipcMain.on('marathon', (_e, request) => {
 
 ipcMain.handle('missions', () => missions?.list() ?? []);
 ipcMain.handle('mission-view', (_e, id) => missions?.view(id));
-ipcMain.handle('mission', (_e, request = {}) =>
+const routeMission = (request) =>
   missionRequest(request, {
     missions,
     model: settings().model,
@@ -339,8 +339,8 @@ ipcMain.handle('mission', (_e, request = {}) =>
       fromUser = false;
       turnEdited = false;
     },
-  }),
-);
+  });
+ipcMain.handle('mission', (_e, request = {}) => routeMission(request));
 
 // Stopping ends the running turn; the conversation carries on in a fresh process.
 ipcMain.on('stop', () => {
@@ -475,13 +475,14 @@ ipcMain.handle('council-preflight', async (_e, { question, mode } = {}) => {
 });
 ipcMain.handle('council-run', (_e, { id, ...options } = {}) => councils?.run(id, options) ?? { error: 'no folder is open' });
 ipcMain.handle('council-cancel', (_e, id) => councils?.cancel(id) ?? { error: 'no folder is open' });
+ipcMain.handle('council-brief-cancel', () => councils?.cancelBrief() ?? { error: 'no folder is open' });
 ipcMain.handle('councils', () => councils?.list() ?? []);
+ipcMain.handle('council-view', (_e, id) => councils?.view(id));
 ipcMain.handle('council-mission', (_e, id) => {
   const plan = councils?.toMission(id);
   if (!plan) return { error: 'no folder is open' };
   if (plan.error) return plan;
-  if (!missions) return { error: 'missions are off in this folder' };
-  return missions.fromPlan(plan.objective, plan.criteria, plan.plan, { sessionId });
+  return routeMission({ action: 'from-plan', plan });
 });
 
 ipcMain.on('open-external', (_e, url) => /^https?:\/\//.test(url) && shell.openExternal(url));

@@ -3,7 +3,12 @@
 export async function missionRequest(request, { missions, model, marathonRunning, sessionId, ensureClaude, stopTurn, restart, notUser }) {
   if (!missions) return { error: 'no folder is open, or missions are off in this folder' };
   const { action, id } = request ?? {};
-  if ((action === 'start' || action === 'resume') && marathonRunning) return { error: 'a marathon is running: /marathon stop ends it first' };
+  if (['start', 'resume', 'approve', 'from-plan'].includes(action) && marathonRunning) return { error: 'a marathon is running: /marathon stop ends it first' };
+  // A Council synthesis (main.js reads it from the council's record, never from the window).
+  if (action === 'from-plan') {
+    const { objective, criteria, plan } = request.plan;
+    return missions.fromPlan(objective, criteria, plan, { sessionId });
+  }
   if (action === 'start') {
     if (model === 'gemini' || model === 'auto') return { error: 'a mission needs Claude Code: pick a Claude model or UltraCode first' };
     ensureClaude();

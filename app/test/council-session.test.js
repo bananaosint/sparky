@@ -12,7 +12,7 @@ const POOL = [...CLAUDE_CANDIDATES, scored('deepseek/a'), scored('qwen/a'), scor
 const letters = (user) => [...user.matchAll(/<proposal letter="(\w)">/g)].map((m) => m[1]);
 
 // A fake io: the brief and every model answer well; the panel comes from POOL.
-function fakeIo(pool = POOL) {
+function fakeIo(pool = POOL, { briefHangs = false } = {}) {
   const calls = [];
   return {
     calls,
@@ -20,8 +20,9 @@ function fakeIo(pool = POOL) {
       catalogs: async () => ({ candidates: pool, notes: ['ollama: not running'] }),
       freeRequestsLeft: async () => 40,
       killAll: () => calls.push('killAll'),
-      call: async (seat, role, req) => {
+      call: async (seat, role, req, signal) => {
         calls.push(role);
+        if (role === 'brief' && briefHangs) return new Promise((_, reject) => signal.addEventListener('abort', () => (calls.push('brief aborted'), reject(new Error('aborted')))));
         if (role === 'brief') return { text: BRIEF, usd: 0.02 };
         if (role === 'proposer') return { text: SECTIONS.map((s) => `## ${s}\nuse an LRU`).join('\n'), usd: 0 };
         if (role === 'judge') {
@@ -34,25 +35,26 @@ function fakeIo(pool = POOL) {
   };
 }
 
-function rig({ pool, consents = {}, budget = 1 } = {}) {
+function rig({ pool, consents = {}, budget = 1, briefHangs = false, deadline = () => new Promise(() => {}) } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'spark-councils-'));
-  const f = fakeIo(pool);
+  const f = fakeIo(pool, { briefHangs });
   const told = [];
   const saved = [];
+  const choices = [];
   const councils = createCouncils({
     root,
-    makeIo: () => f.io,
+    makeIo: (choice) => (choices.push(choice), f.io),
     notify: (m) => told.push(m),
     now: () => new Date(2026, 9, 10, 20, 0, 0).getTime(),
     hex4: () => 'beef',
     shuffle: (n) => [...Array(n).keys()],
     sleep: async () => {},
-    deadline: () => new Promise(() => {}),
+    deadline,
     consents: () => consents,
     saveConsent: (provider, dataCollection) => saved.push([provider, dataCollection]),
     budgetUsd: () => budget,
   });
-  return { root, councils, calls: f.calls, told, saved };
+  return { root, councils, calls: f.calls, told, saved, choices };
 }
 
 test('pre-flight: the brief, the panel with reasons, estimates, consent needed, free requests left, all saved', async () => {
@@ -93,6 +95,34 @@ test('a consented run goes through every stage, saves the record, remembers the 
   assert.deepEqual(plan.criteria, [{ text: 'p95 under 50 ms', how: 'npm run bench', by: 'claude' }]);
   assert.match(plan.plan, /## Decision/);
   assert.ok(r.told.some((m) => m.kind === 'council' && m.id === pre.id));
+});
+
+test('a remembered data-collection choice stands unless consent is given now; anything but "allow" is deny', async () => {
+  const allowed = rig({ budget: 5, consents: { openrouter: { at: 1, dataCollection: 'allow' } } });
+  const pre = await allowed.councils.preflight('speed up the cache', 'light');
+  await allowed.councils.run(pre.id, { dataCollection: 'deny' });
+  await allowed.councils.finished(pre.id);
+  assert.equal(allowed.choices.at(-1), 'allow');
+  assert.deepEqual(allowed.saved, []);
+  const odd = rig({ budget: 5 });
+  const p2 = await odd.councils.preflight('speed up the cache', 'light');
+  await odd.councils.run(p2.id, { consent: true, dataCollection: 'yes please' });
+  await odd.councils.finished(p2.id);
+  assert.equal(odd.choices.at(-1), 'deny');
+  assert.deepEqual(odd.saved, [['openrouter', 'deny']]);
+});
+
+test('the brief has a time limit and a cancel, and either one stops its call', async () => {
+  const slow = rig({ briefHangs: true, deadline: async () => {} });
+  assert.match((await slow.councils.preflight('speed up the cache', 'light')).error, /no brief within 3 minutes/);
+  assert.ok(slow.calls.includes('brief aborted'));
+  const stopped = rig({ briefHangs: true });
+  const waiting = stopped.councils.preflight('speed up the cache', 'light');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(stopped.councils.cancelBrief(), { cancelled: true });
+  assert.deepEqual(await waiting, { error: 'you cancelled the brief' });
+  assert.ok(stopped.calls.includes('brief aborted') && stopped.calls.includes('killAll'));
+  assert.deepEqual(stopped.councils.cancelBrief(), { error: 'no brief is being written' });
 });
 
 test('cancel stops the run and kills Claude calls; ids that are not council ids are refused', async () => {

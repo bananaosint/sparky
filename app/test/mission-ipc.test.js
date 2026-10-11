@@ -16,6 +16,7 @@ function deps(over = {}) {
     cancel: (id) => (calls.push(['cancel', id]), { mission: { id }, stop: true }),
     resume: (id, restart) => (calls.push(['resume', id]), restart('s1'), { mission: { id } }),
     checkAgain: (id) => (calls.push(['checkAgain', id]), { ok: true }),
+    fromPlan: (objective, criteria, plan, options) => (calls.push(['fromPlan', objective, criteria.length, plan, options.sessionId]), { mission: { id: 'm2' } }),
   };
   return {
     calls,
@@ -42,7 +43,16 @@ test('resume and start are refused while a marathon runs', async () => {
   const { calls, d } = deps({ marathonRunning: true });
   assert.match((await missionRequest({ action: 'resume', id: 'm1' }, d)).error, /marathon/);
   assert.match((await missionRequest({ action: 'start', objective: 'x' }, d)).error, /marathon/);
+  assert.match((await missionRequest({ action: 'approve', id: 'm1', criteria: [] }, d)).error, /marathon/);
+  assert.match((await missionRequest({ action: 'from-plan', plan: { objective: 'x', criteria: [{}], plan: 'p' } }, d)).error, /marathon/);
   assert.deepEqual(calls, []);
+});
+
+test("a council's plan becomes a mission through the same checks, on the chat's session", async () => {
+  const { calls, d } = deps({ sessionId: 's9' });
+  const out = await missionRequest({ action: 'from-plan', plan: { objective: 'speed up the cache', criteria: [{ text: 'p95', how: 'npm run bench', by: 'claude' }], plan: '## Decision' } }, d);
+  assert.deepEqual(out, { mission: { id: 'm2' } });
+  assert.deepEqual(calls, [['fromPlan', 'speed up the cache', 1, '## Decision', 's9']]);
 });
 
 test('start needs Claude Code; cancel of a live mission stops the turn; resume restarts on the session', async () => {

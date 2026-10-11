@@ -114,7 +114,7 @@ The card updates as each model answers:
 - the synthesis
 - what each provider reported it cost
 
-**Stop the council** cancels the calls in flight. A council keeps only what really came back. With fewer than 2 proposals or 2 judges it stops and says why.
+**Stop the council** cancels the calls in flight. A council keeps only what really came back. With fewer than 2 proposals or 2 judges it stops and says why. The brief has 3 minutes and its own Cancel. `/council list` shows this folder's councils, and opens any of them again from its record in `.spark/councils/`.
 
 **Models.** Claude is always there, on your plan. With an **OpenRouter key** (⚙ settings), Spark reads OpenRouter's catalog live and picks open-weight and free models by OpenRouter's coding and intelligence benchmark indexes, one per model family. With your Gemini key, Gemini and Gemma models join; with Ollama running, local models of 7B parameters or more join. Ollama's `:cloud` models run on Ollama's servers, so they're left out. Judges never repeat a proposer. They come from new families where possible, and from a proposer's family only when nothing else is left, which the card says.
 

@@ -676,12 +676,40 @@ async function councilCommand(mode, question) {
   autosize();
   if (!question) return note('a council needs a question: /council [full] <question>');
   const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1 });
-  card.waiting(`${mode === 'full' ? 'Full' : 'Light'} council: Claude is reading the project to write the brief. Nothing leaves this machine until you approve the pre-flight.`);
+  card.waiting(`${mode === 'full' ? 'Full' : 'Light'} council: Claude is reading the project to write the brief. Nothing leaves this machine until you approve the pre-flight.`, () => spark.councilBriefCancel());
   append(card.node);
   const out = await spark.councilPreflight(question, mode);
   if (out.error) return card.failed(out.error);
   councilCards.set(out.id, card);
   card.update(out);
+}
+
+// The councils run in this folder, newest first; one opens as its card, from its saved record.
+async function councilList() {
+  input.value = '';
+  autosize();
+  const all = await spark.councils();
+  if (!all.length) return note('no councils in this folder yet: /council [full] <question>');
+  const box = el('div', 'result');
+  box.append(el('div', 'mission-kicker', 'Councils in this folder'));
+  const ul = el('ul', 'council-list');
+  for (const c of all.slice(0, 10)) {
+    const open = el('button', 'link', c.question);
+    open.type = 'button';
+    open.addEventListener('click', async () => {
+      const council = await spark.councilView(c.id);
+      if (!council) return note('that council file could not be read');
+      const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1 });
+      card.update(council);
+      councilCards.set(c.id, card);
+      append(card.node);
+    });
+    const li = el('li');
+    li.append(open, el('span', 'meta', ` · ${c.mode} · ${c.run?.status ?? 'not run'} · ${new Date(c.createdAt).toLocaleString()}`));
+    ul.append(li);
+  }
+  box.append(ul);
+  append(box);
 }
 
 spark.on('council', (m) => councilCards.get(m.id)?.update(m.council));
@@ -903,6 +931,10 @@ function runCommand(text) {
   }
   if (command.kind === 'council') {
     councilCommand(command.mode, command.question);
+    return true;
+  }
+  if (command.kind === 'council-list') {
+    councilList();
     return true;
   }
   if (command.kind === 'mode') {

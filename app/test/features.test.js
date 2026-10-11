@@ -142,3 +142,8 @@ test('/council is Light by default; /council full is Full', () => {
   assert.deepEqual(parseCommand('/council full compare two cache designs'), { kind: 'council', mode: 'full', question: 'compare two cache designs' });
   assert.deepEqual(parseCommand('/council'), { kind: 'council', mode: 'light', question: '' });
 });
+
+test('/council list shows the councils already run here', () => {
+  assert.deepEqual(parseCommand('/council list'), { kind: 'council-list' });
+  assert.deepEqual(parseCommand('/council list the options'), { kind: 'council', mode: 'light', question: 'list the options' });
+});

@@ -16,6 +16,7 @@ export function parseCommand(text) {
   if (name === 'marathon') return { kind: 'marathon', args: arg.trim() };
   if (name === 'mission') return { kind: 'mission', args: arg.trim() };
   if (name === 'council') {
+    if (arg.trim().toLowerCase() === 'list') return { kind: 'council-list' };
     const full = /^full\b/i.test(arg.trim());
     return { kind: 'council', mode: full ? 'full' : 'light', question: (full ? arg.trim().slice(4) : arg).trim() };
   }

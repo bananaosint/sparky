@@ -10,6 +10,9 @@ export function createCouncils({ root, makeIo, notify, now, hex4, shuffle, sleep
   const dir = join(root, '.spark', 'councils');
   const runs = new Map();
   const file = (id) => join(dir, `${id}.json`);
+  // The brief being written, so the waiting card can cancel it.
+  let briefing = null;
+  const BRIEF_MS = 180_000;
 
   function save(council) {
     mkdirSync(dir, { recursive: true });
@@ -32,7 +35,22 @@ export function createCouncils({ root, makeIo, notify, now, hex4, shuffle, sleep
     async preflight(question, mode) {
       const io = makeIo('deny');
       const sonnet = CLAUDE_CANDIDATES.find((c) => c.id === 'sonnet');
-      const reply = await io.call({ candidate: sonnet }, 'brief', { system: BRIEF_SYSTEM, user: briefPrompt(question), maxTokens: 6000 }, new AbortController().signal);
+      const controller = new AbortController();
+      const mine = { controller, io, why: '' };
+      briefing = mine;
+      void deadline(BRIEF_MS).then(() => {
+        mine.why ||= 'no brief within 3 minutes; ask again, or with a narrower question';
+        controller.abort();
+      });
+      let reply;
+      try {
+        reply = await io.call({ candidate: sonnet }, 'brief', { system: BRIEF_SYSTEM, user: briefPrompt(question), maxTokens: 6000 }, controller.signal);
+      } catch (err) {
+        return { error: mine.why || err.message };
+      } finally {
+        if (briefing === mine) briefing = null;
+      }
+      if (mine.why) return { error: mine.why };
       const brief = parseBrief(reply.text);
       if (!brief) return { error: 'the brief came back without a brief block; ask again with a clearer question' };
       const { candidates, notes } = await io.catalogs();
@@ -49,7 +67,9 @@ export function createCouncils({ root, makeIo, notify, now, hex4, shuffle, sleep
       if (runs.has(id) || council.run) return { error: 'this council already ran' };
       const refusal = runRefusal(council, { consent, reduced }, budgetUsd());
       if (refusal) return { error: refusal };
-      const choice = dataCollection ?? consents().openrouter?.dataCollection ?? 'deny';
+      // The window always sends a choice; it counts only while the OpenRouter consent is being given.
+      const asked = council.consentNeeded.includes('openrouter') ? dataCollection : consents().openrouter?.dataCollection;
+      const choice = asked === 'allow' ? 'allow' : 'deny';
       for (const p of council.consentNeeded) saveConsent(p, choice);
       const io = makeIo(choice);
       const controller = new AbortController();
@@ -71,6 +91,14 @@ export function createCouncils({ root, makeIo, notify, now, hex4, shuffle, sleep
       });
       runs.set(id, { controller, io, promise });
       return { started: true };
+    },
+
+    cancelBrief() {
+      if (!briefing) return { error: 'no brief is being written' };
+      briefing.why = 'you cancelled the brief';
+      briefing.controller.abort();
+      briefing.io.killAll();
+      return { cancelled: true };
     },
 
     finished: (id) => runs.get(id)?.promise ?? Promise.resolve(load(id)?.run),

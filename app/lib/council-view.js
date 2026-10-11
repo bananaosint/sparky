@@ -219,8 +219,14 @@ export function councilCard({ el, markdown, spark, note, cap }) {
 
   return {
     node,
-    waiting(text) {
-      node.replaceChildren(el('div', 'mission-kicker', 'Council'), line('mission-note', text));
+    waiting(text, onCancel) {
+      const stop = el('button', 'no', 'Cancel');
+      stop.type = 'button';
+      stop.addEventListener('click', () => {
+        stop.disabled = true;
+        onCancel();
+      });
+      node.replaceChildren(el('div', 'mission-kicker', 'Council'), line('mission-note', text), stop);
     },
     failed(text) {
       node.replaceChildren(el('div', 'mission-kicker', 'Council'), line('mission-warn', `Not started: ${text}`));
