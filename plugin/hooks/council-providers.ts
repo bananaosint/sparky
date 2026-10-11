@@ -71,14 +71,16 @@ export const geminiRequest = (model: string, r: CallRequest, { key }: { key: str
     {
       systemInstruction: { parts: [{ text: r.system }] },
       contents: [{ role: 'user', parts: [{ text: r.user }] }],
-      generationConfig: { maxOutputTokens: r.maxTokens },
+      // Thinking tokens count against this cap, and Gemma's thinking can't be turned down.
+      generationConfig: { maxOutputTokens: r.maxTokens + 8192 },
     },
   ),
 })
 
 export function parseGemini(body: unknown): Reply {
   const j = obj(body)
-  const parts = obj(obj((j.candidates as unknown[] | undefined)?.[0]).content).parts
+  const candidate = obj((j.candidates as unknown[] | undefined)?.[0])
+  const parts = obj(candidate.content).parts
   const text = Array.isArray(parts)
     ? parts
         .map(obj)
@@ -87,7 +89,7 @@ export function parseGemini(body: unknown): Reply {
         .join('')
         .trim()
     : ''
-  if (!text) throw callError(undefined, 'empty answer')
+  if (!text) throw callError(undefined, `empty answer${typeof candidate.finishReason === 'string' ? ` (${candidate.finishReason})` : ''}`)
   return { text, ...usageOf(obj(j.usageMetadata), 'promptTokenCount', 'candidatesTokenCount') }
 }
 

@@ -20,6 +20,8 @@ export type Candidate = {
   coding?: number
   intelligence?: number
   created?: number
+  // The version in a Gemini model's name (3.8 in gemini-3.8-flash): the Gemini catalog has no dates.
+  version?: number
 }
 export type Mode = 'light' | 'full'
 export type Role = 'proposer' | 'judge' | 'synth'
@@ -112,6 +114,8 @@ export function normalizeGemini(json: unknown): Candidate[] {
     if (!id || NOT_CHAT.test(id) || !list(m.supportedGenerationMethods).includes('generateContent')) return []
     const gemma = id.startsWith('gemma')
     const c: Candidate = { id, provider: 'gemini', name: typeof m.displayName === 'string' ? m.displayName : id, family: gemma ? 'gemma' : 'gemini', access: 'gemini-key', openWeights: gemma }
+    const version = Number(/^(?:gemini|gemma)-(\d+(?:\.\d+)?)/.exec(id)?.[1])
+    if (Number.isFinite(version)) c.version = version
     const context = num(m.inputTokenLimit)
     const maxOutput = num(m.outputTokenLimit)
     if (context !== undefined) c.context = context
@@ -120,12 +124,20 @@ export function normalizeGemini(json: unknown): Candidate[] {
   })
 }
 
-// GET http://127.0.0.1:11434/api/tags: local models, open weights, context not reported.
+// Billions of parameters from Ollama's "parameter_size" ("32.8B", "270M"); undefined when absent.
+const billions = (size: unknown) => {
+  const m = /^([\d.]+)\s*([BM])$/i.exec(String(size ?? '').trim())
+  return m ? Number(m[1]) / (m[2]!.toUpperCase() === 'M' ? 1000 : 1) : undefined
+}
+
+// GET http://127.0.0.1:11434/api/tags: local models, open weights, context not reported. Models
+// under 7B parameters are left out: a live run showed them unable to follow the proposal format.
 export function normalizeOllama(json: unknown): Candidate[] {
   return list(obj(json).models).flatMap((raw): Candidate[] => {
     const m = obj(raw)
     const id = typeof m.name === 'string' ? m.name : ''
-    if (!id) return []
+    const size = billions(obj(m.details).parameter_size)
+    if (!id || (size !== undefined && size < 7)) return []
     const family = typeof obj(m.details).family === 'string' ? String(obj(m.details).family) : id.split(':')[0]!
     return [{ id, provider: 'ollama', name: id, family, access: 'local', openWeights: true }]
   })
@@ -144,13 +156,19 @@ const scoredBy = (first: 'coding' | 'intelligence') => (a: Candidate, b: Candida
   const second = first === 'coding' ? 'intelligence' : 'coding'
   const has = (c: Candidate) => c.coding !== undefined || c.intelligence !== undefined
   if (has(a) !== has(b)) return has(a) ? -1 : 1
-  return (b[first] ?? -1) - (a[first] ?? -1) || (b[second] ?? -1) - (a[second] ?? -1) || (b.context ?? 0) - (a.context ?? 0) || (b.created ?? 0) - (a.created ?? 0)
+  return (
+    (b[first] ?? -1) - (a[first] ?? -1) ||
+    (b[second] ?? -1) - (a[second] ?? -1) ||
+    (b.context ?? 0) - (a.context ?? 0) ||
+    (b.created ?? 0) - (a.created ?? 0) ||
+    (b.version ?? 0) - (a.version ?? 0)
+  )
 }
 
 function reasonFor(c: Candidate, first: 'coding' | 'intelligence') {
   const scores =
     c.coding === undefined && c.intelligence === undefined
-      ? 'no benchmark data; picked by context size'
+      ? 'no benchmark data; picked by context size and recency'
       : first === 'coding'
         ? `coding index ${c.coding ?? 'n/a'}, intelligence index ${c.intelligence ?? 'n/a'}`
         : `intelligence index ${c.intelligence ?? 'n/a'}, coding index ${c.coding ?? 'n/a'}`

@@ -129,3 +129,28 @@ test('when only used families are left, a judge may share a proposer family (nev
   expect(panel.judges[0]!.reason).toContain('same family as a proposer')
   expect(panel.empty).toEqual(['1 of 4 proposer seats'])
 })
+
+test('local models under 7B parameters are left out: they can not follow the proposal format', () => {
+  const local = normalizeOllama({
+    models: [
+      { name: 'moondream:latest', details: { family: 'moondream', parameter_size: '1.8B' } },
+      { name: 'gemma3:270m', details: { family: 'gemma3', parameter_size: '270M' } },
+      { name: 'qwen3:32b', details: { family: 'qwen3', parameter_size: '32.8B' } },
+      { name: 'mystery:latest', details: { family: 'mystery' } },
+    ],
+  })
+  expect(local.map((c) => c.id)).toEqual(['qwen3:32b', 'mystery:latest'])
+})
+
+test('with no benchmarks and equal context, the newer Gemini version ranks first', () => {
+  const gemini = normalizeGemini({
+    models: [
+      { name: 'models/gemini-2.5-flash', inputTokenLimit: 1048576, outputTokenLimit: 65536, supportedGenerationMethods: ['generateContent'] },
+      { name: 'models/gemini-3.8-flash', inputTokenLimit: 1048576, outputTokenLimit: 65536, supportedGenerationMethods: ['generateContent'] },
+      { name: 'models/gemma-4-31b-it', inputTokenLimit: 131072, supportedGenerationMethods: ['generateContent'] },
+      { name: 'models/gemma-3-27b-it', inputTokenLimit: 131072, supportedGenerationMethods: ['generateContent'] },
+    ],
+  })
+  const panel = pickCouncil([...CLAUDE_CANDIDATES, ...gemini], 'light', { briefChars: 1000 })
+  expect(panel.proposers.map((s) => s.candidate.id)).toEqual(['sonnet', 'gemini-3.8-flash', 'gemma-4-31b-it'])
+})

@@ -15,10 +15,13 @@ export function prepareSession({
   passthrough = [],
   env = process.env,
   key = gemini ? loadKey() : undefined,
+  // For the terminal's /council; the mod takes it at startup and unsets it, like the Gemini key.
+  openrouterKey,
   theme = configuredTheme(),
 }) {
   const childEnv = { ...env, SPARK_THEME: theme };
   if (key) childEnv.SPARK_GEMINI_KEY = key;
+  if (openrouterKey) childEnv.SPARK_OPENROUTER_KEY = openrouterKey;
   if (plain) childEnv.SPARK_PLAIN = '1';
   if (!tests) childEnv.SPARK_NO_TESTS = '1';
   return {

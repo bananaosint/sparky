@@ -27,7 +27,9 @@ test('gemini: key in a header, system and token cap in the body; no cost reporte
   expect(init.headers['x-goog-api-key']).toBe('AIza-x')
   const body = JSON.parse(init.body)
   expect(body.systemInstruction.parts[0].text).toBe('be a judge')
-  expect(body.generationConfig.maxOutputTokens).toBe(2500)
+  // Thinking tokens count against the cap: a live run showed Gemma spending all of it on thought.
+  expect(body.generationConfig.maxOutputTokens).toBe(2500 + 8192)
+  expect(() => parseGemini({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'thinking', thought: true }] } }] })).toThrow('empty answer (MAX_TOKENS)')
   expect(parseGemini({ candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: 'answer' }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 3 } })).toEqual({ text: 'answer', inTokens: 9, outTokens: 3 })
 })
 

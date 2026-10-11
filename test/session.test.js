@@ -23,3 +23,8 @@ test('an unknown configured theme falls back to ultraviolet', () => {
   assert.equal(configuredTheme({ theme: 'neon' }), 'ultraviolet');
   assert.equal(configuredTheme({}), 'ultraviolet');
 });
+
+test('an OpenRouter key, when given, rides along for the mod to take and unset', () => {
+  assert.equal(prepareSession({ pluginDir: 'p', key: null, openrouterKey: 'sk-or', theme: 'ultraviolet', env: {} }).env.SPARK_OPENROUTER_KEY, 'sk-or');
+  assert.equal(prepareSession({ pluginDir: 'p', key: null, theme: 'ultraviolet', env: {} }).env.SPARK_OPENROUTER_KEY, undefined);
+});
