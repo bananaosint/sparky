@@ -4,6 +4,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { parseLine, userMessage } from './stream.js';
 import { linkModules } from '../staged/plugin/hooks/agents.ts';
 import { numstat } from '../staged/plugin/hooks/snapshot.ts';
 
@@ -50,6 +52,38 @@ export async function bringBack(run, root, wt, base) {
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+// A worker's Claude Code process (`child`, started in its worktree by main.js): each turn() sends
+// one message and resolves with that turn's result event. Every event goes to onEvent first.
+export function startWorker({ child, onEvent }) {
+  let waiting = null;
+  let gone;
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    for (const event of parseLine(line)) {
+      onEvent(event);
+      if (event.kind === 'result' && waiting) {
+        const w = waiting;
+        waiting = null;
+        w.resolve(event);
+      }
+    }
+  });
+  child.on('exit', (code) => {
+    gone = new Error(`the worker's Claude Code stopped (code ${code})`);
+    waiting?.reject(gone);
+    waiting = null;
+  });
+  return {
+    turn(text) {
+      if (gone) return Promise.reject(gone);
+      return new Promise((resolve, reject) => {
+        waiting = { resolve, reject };
+        child.stdin.write(`${userMessage({ text })}\n`);
+      });
+    },
+    stop: () => child.kill(),
+  };
 }
 
 export async function removeWorktree(run, root, wt) {

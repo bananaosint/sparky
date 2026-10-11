@@ -4,7 +4,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bringBack, prepareWorktree, removeWorktree } from '../lib/workers.js';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { bringBack, prepareWorktree, removeWorktree, startWorker } from '../lib/workers.js';
 import { gitIn } from '../lib/mission-open.js';
 import { pinSnapshot } from '../staged/plugin/hooks/snapshot.ts';
 
@@ -61,4 +63,42 @@ test('a worker with no changes comes back with none; removing a worktree removes
   await removeWorktree(run, root, t2);
   assert.equal(existsSync(t2.path), false);
   assert.equal(spawnSync('git', ['branch', '--list', t2.branch], { cwd: root, encoding: 'utf8' }).stdout.trim(), '');
+});
+
+// A stand-in for a worker's Claude Code process: answers each message with a result line.
+function fakeClaude(answers) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.written = [];
+  child.killed = false;
+  child.stdin = {
+    write(line) {
+      child.written.push(JSON.parse(line));
+      const answer = answers.shift();
+      if (answer === 'exit') setTimeout(() => child.emit('exit', 1), 5);
+      else if (answer) setTimeout(() => child.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: answer, duration_ms: 1000, total_cost_usd: 0.01 })}\n`), 5);
+    },
+  };
+  child.kill = () => ((child.killed = true), child.emit('exit', null));
+  return child;
+}
+
+test("a worker's process takes one turn per message and hands back its result; its events are its own", async () => {
+  const child = fakeClaude(['Added the limiter.', 'Fixed it.']);
+  const seen = [];
+  const w = startWorker({ child, onEvent: (e) => seen.push(e.kind) });
+  const first = await w.turn('Do only task t2 now');
+  assert.deepEqual([first.ok, first.text], [true, 'Added the limiter.']);
+  const second = await w.turn("Task t2's check failed");
+  assert.equal(second.text, 'Fixed it.');
+  assert.deepEqual(child.written.map((m) => m.message.content.at(-1).text), ['Do only task t2 now', "Task t2's check failed"]);
+  assert.deepEqual(seen, ['result', 'result']);
+  w.stop();
+  assert.equal(child.killed, true);
+});
+
+test("a worker whose process dies mid-turn fails that turn with the reason, and takes no more", async () => {
+  const w = startWorker({ child: fakeClaude(['exit']), onEvent: () => {} });
+  await assert.rejects(w.turn('Do only task t2 now'), /the worker's Claude Code stopped \(code 1\)/);
+  await assert.rejects(w.turn('again'), /the worker's Claude Code stopped/);
 });
