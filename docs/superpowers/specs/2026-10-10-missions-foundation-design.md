@@ -27,7 +27,7 @@ One mission is active per window. `/mission` while one is active, or while a mar
 
 ### Draft
 
-Spark switches the running session to plan mode with Claude Code's `set_permission_mode` control request. While the mission is in `draft`, the permission bridge also denies edit tools, Bash, PowerShell and `ExitPlanMode`, whatever "always allow" or auto-accept edits say. Plan mode is Claude Code's own enforcement, and the bridge is Spark's. Checked against Claude Code 2.1.296: `set_permission_mode` to `plan` and back to `default` both succeed without a restart. If a later version refuses it, the bridge rule holds alone and the timeline records the refusal.
+Spark switches the running session to plan mode with Claude Code's `set_permission_mode` control request. While the mission is in `draft`, the permission bridge also denies edit tools, Bash, PowerShell and `ExitPlanMode`, whatever "always allow" or auto-accept edits say. The bridge is only asked about what Claude Code would ask about: the end-to-end run showed plan mode letting a read-only `git ls-files` through without asking, which is fine for a draft that only reads. Plan mode is Claude Code's own enforcement, and the bridge is Spark's. Checked against Claude Code 2.1.296: `set_permission_mode` to `plan` and back to `default` both succeed without a restart. If a later version refuses it, the bridge rule holds alone and the timeline records the refusal.
 
 The draft message gives the objective and asks for a short interpretation, then a fenced `mission` block:
 

@@ -39,7 +39,7 @@ Throwaway. It settles whether drafts get Claude Code's plan mode on top of the b
 - Create (outside the repo): `%TEMP%\spark-probe\probe.mjs`
 - Modify: `docs/superpowers/specs/2026-10-10-missions-foundation-design.md` (Draft section, one sentence)
 
-- [ ] **Step 1: Write the probe**
+- [x] **Step 1: Write the probe**
 
 ```js
 // %TEMP%\spark-probe\probe.mjs: sends set_permission_mode twice and no user message, so no model call.
@@ -58,12 +58,12 @@ createInterface({ input: child.stdout }).on('line', (line) => {
 send({ type: 'control_request', request_id: 'pm1', request: { subtype: 'set_permission_mode', mode: 'plan' } });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run (PowerShell): `node "$env:TEMP\spark-probe\probe.mjs"`
 Expected: two lines with `"subtype":"success"`, for `pm1` and `pm2`. If Spark's approval bridge refuses the command, ask the user to run it and paste the output.
 
-- [ ] **Step 3: Record the result in the spec**
+- [x] **Step 3: Record the result in the spec**
 
 On success, replace the Draft section's sentences from "Plan Task 1 checks `set_permission_mode`" to "says so." with "Checked against Claude Code <version>: `set_permission_mode` to `plan` and back to `default` both succeed."
 
@@ -71,7 +71,7 @@ On failure, write the error there instead, and add to "Not covered": "Drafts are
 
 The runner sends the request either way, and a refusal is recorded (Task 7).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-10-10-missions-foundation-design.md
@@ -100,7 +100,7 @@ git commit -m "Missions spec: record the permission-mode probe"
   - `onTurnEnd(m, turn, halted) → TurnEnd`, `turnEnded(m, earlier, turn, gates, gateOffset, at) → { mission, records }`, `resumeFailed(records) → boolean`
   - `asMission(json) → Mission | undefined`, `asRecord(json) → MissionRecord | undefined`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // plugin/test/mission.test.ts
@@ -253,12 +253,12 @@ test('drafts only read', () => {
 })
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `claude plugin test plugin`
 Expected: FAIL in `mission.test.ts`: cannot resolve `../hooks/mission`.
 
-- [ ] **Step 3: Write `plugin/hooks/mission.ts`**
+- [x] **Step 3: Write `plugin/hooks/mission.ts`**
 
 ```ts
 // Missions: an objective, criteria the person approved, and a record of what really happened.
@@ -592,12 +592,12 @@ export function asMission(j: unknown): Mission | undefined {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `claude plugin test plugin`
 Expected: the mission tests PASS, and the rest still PASS.
 
-- [ ] **Step 5: Type-check and commit**
+- [x] **Step 5: Type-check and commit**
 
 Run: `npm run check`. Expected: no errors, "Validation passed".
 
@@ -620,7 +620,7 @@ Do Task 4 first, or with this task: `mission-report.ts` imports `pinSnapshot`, `
 - Consumes: the Task 2 types; `pinSnapshot`, `numstat`, `treeOf` and type `Run` from Task 4. Only `gitFacts` calls those, and Task 7 tests it with real git.
 - Produces: types `FileStat`, `Facts`, `TestState`, `Report`, `Row`, `Section`; `testState(records, facts)`, `totals(records) → { usd?, tokens?, workedMs }`, `buildReport(m, records, facts) → Report`, `describe(record) → Row | undefined`, `reportSections(report: unknown) → Section[]`, `clock(ms)`, `gitFacts(run | undefined, m, now) → Promise<{ mission, facts }>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // plugin/test/mission-report.test.ts
@@ -712,12 +712,12 @@ test('clock reads m:ss, or h:mm:ss past an hour', () => {
 })
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `claude plugin test plugin`
 Expected: FAIL: cannot resolve `../hooks/mission-report`.
 
-- [ ] **Step 3: Write `plugin/hooks/mission-report.ts`**
+- [x] **Step 3: Write `plugin/hooks/mission-report.ts`**
 
 ```ts
 // What a mission ends with, and its timeline: both built from records alone. Claude's own
@@ -957,11 +957,11 @@ export async function gitFacts(run: Run | undefined, m: Mission, now: number): P
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `claude plugin test plugin`. Expected: PASS.
 
-- [ ] **Step 5: Type-check and commit**
+- [x] **Step 5: Type-check and commit**
 
 Run: `npm run check`. Expected: no errors.
 
@@ -981,7 +981,7 @@ git commit -m "Missions: reports and timeline rows built from records"
 **Interfaces:**
 - Produces: `pinSnapshot(run, ref, label) → Promise<string>` (the sha), `treeNow(run) → Promise<string>`, `treeOf(run, commit) → Promise<string>`, `numstat(run, from, to) → Promise<FileStat[]>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `test/snapshot.test.js`, and change its import line to `import { takeSnapshot, listSnapshots, restoreSnapshot, fileDiffs, pinSnapshot, treeNow, treeOf, numstat } from '../plugin/hooks/snapshot.ts';`
 
@@ -1014,12 +1014,12 @@ test('treeNow matches the tree of a snapshot of the same files, and numstat coun
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `node --test test/snapshot.test.js`
 Expected: FAIL: `pinSnapshot` is not exported.
 
-- [ ] **Step 3: Implement** (in `plugin/hooks/snapshot.ts`)
+- [x] **Step 3: Implement** (in `plugin/hooks/snapshot.ts`)
 
 Share the commit step between `takeSnapshot` and the new `pinSnapshot`:
 
@@ -1065,12 +1065,12 @@ export async function numstat(run: Run, from: string, to: string) {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `node --test test/snapshot.test.js` and `claude plugin test plugin`.
 Expected: PASS, including the existing snapshot tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugin/hooks/snapshot.ts test/snapshot.test.js
@@ -1095,7 +1095,7 @@ git commit -m "Snapshots: pinned refs, tree hashes and numstat for missions"
   - `GateResult` becomes `{ ok: true; tree: string } | { ok: false; block: string; exit: number; tree: string }`.
   - `inSparkDir(file, top)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // plugin/test/missiongate.test.ts
@@ -1190,12 +1190,12 @@ test('.spark/ paths are recognised however they are written', () => {
 })
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `claude plugin test plugin`
 Expected: FAIL: no `gate.jsonl` writes, `inSparkDir` missing, no deny.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `plugin/hooks/testgate.ts`: import `treeNow` and return what the run saw.
 
@@ -1292,11 +1292,11 @@ and the build branch becomes:
     }
 ```
 
-- [ ] **Step 4: Run all checks**
+- [x] **Step 4: Run all checks**
 
 Run: `claude plugin test plugin`, `npm run test:launcher`, `npm run check`. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugin/hooks/testgate.ts plugin/hooks/halt.ts plugin/hooks/gate.ts plugin/hooks/register.tsx plugin/test/missiongate.test.ts plugin/test/gate.test.ts plugin/test/halt.test.ts
@@ -1321,7 +1321,7 @@ git commit -m "Gate outcomes go to .spark/gate.jsonl; .spark/ can't be edited by
     - `gateSize() → number`, `gateSince(offset) → { records, offset }`
   - `excludeSpark(excludeFile)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 // app/test/mission-store.test.js
@@ -1419,12 +1419,12 @@ test('excludeSpark adds .spark/ once', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `cd app; npm test`
 Expected: FAIL: cannot find `../lib/mission-store.js`.
 
-- [ ] **Step 3: Write `app/lib/mission-store.js`**
+- [x] **Step 3: Write `app/lib/mission-store.js`**
 
 ```js
 // Missions on disk, under the folder's .spark/: missions/<id>/{mission.json,events.jsonl,report.json}
@@ -1525,11 +1525,11 @@ export function excludeSpark(excludeFile) {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd app; npm test`. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/lib/mission-store.js app/test/mission-store.test.js
@@ -1559,7 +1559,7 @@ git commit -m "Missions: the .spark/missions store, checked on the way back in"
     - `view(id) → { mission, rows, totals, sections?, active } | undefined`
   - Window messages (`notify`): `{ kind: 'state', mission, active }`, `{ kind: 'row', id, row }`, `{ kind: 'review', mission }`, `{ kind: 'report', id, mission, sections }`, `{ kind: 'error', id, error }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `app/test/core.test.js`, add `setPermissionMode` to the `stream.js` import and add:
 
@@ -1770,12 +1770,12 @@ test('in a git repo: start and end are pinned, files come from numstat, tests pa
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `cd app; npm test`
 Expected: FAIL: `setPermissionMode` isn't exported, and `mission-runner.js` is missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/lib/stream.js`, after `setModel`:
 
@@ -1997,11 +1997,11 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd app; npm test`, then the root `npm test`. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/lib/stream.js app/lib/mission-runner.js app/test/mission-runner.test.js app/test/core.test.js
@@ -2030,7 +2030,7 @@ git commit -m "Missions: the runner on the live Claude Code stream"
   - `spark.missions() → Promise<list>`, `spark.missionView(id) → Promise<view | undefined>`, and channel `'mission'` carrying the Task 7 messages.
   - `parseCommand('/mission …') → { kind: 'mission', args }`.
 
-- [ ] **Step 1: Write the failing test** (in `app/test/core.test.js`)
+- [x] **Step 1: Write the failing test** (in `app/test/core.test.js`)
 
 ```js
 test('/mission becomes a mission command with its arguments', () => {
@@ -2039,12 +2039,12 @@ test('/mission becomes a mission command with its arguments', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `cd app; npm test`
 Expected: FAIL: it returns `{ kind: 'passthrough' }`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/lib/commands.js`: after the marathon line, add `if (name === 'mission') return { kind: 'mission', args: arg.trim() };` and name `/mission` in the header comment.
 
@@ -2171,11 +2171,11 @@ ipcMain.handle('mission', async (_e, request = {}) => {
 });
 ```
 
-- [ ] **Step 4: Run all checks**
+- [x] **Step 4: Run all checks**
 
 Run: `cd app; npm test`, then the root `npm test` and `npm run check`. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/lib/commands.js app/main.js app/preload.cjs app/renderer.js app/test/core.test.js
@@ -2198,7 +2198,7 @@ Load `spark:ui-taste` and `ui-ux-pro-max` before this task and follow them. The 
   - sections: `{ heading, lines: [{ text, tone? }], markdown? }`
 - Produces: `createMissionsView({ spark, el, markdown, onStart, onToggle })`, returning `{ open(id?), close(), isOpen(), update(mission), addRow(id, row), showReport(id), tick() }`.
 
-- [ ] **Step 1: Markup** (`app/index.html`)
+- [x] **Step 1: Markup** (`app/index.html`)
 
 In `nav.actions`, before `＋ New`:
 
@@ -2222,7 +2222,7 @@ After `</main>`:
 
 Add `/mission` to the composer placeholder's list of commands.
 
-- [ ] **Step 2: The view module** (`app/lib/missions-view.js`)
+- [x] **Step 2: The view module** (`app/lib/missions-view.js`)
 
 ```js
 // The Missions view: this folder's missions on the left, the chosen one on the right. Main sends
@@ -2395,7 +2395,7 @@ export function createMissionsView({ spark, el, markdown, onStart, onToggle }) {
 }
 ```
 
-- [ ] **Step 3: Renderer wiring** (`app/renderer.js`)
+- [x] **Step 3: Renderer wiring** (`app/renderer.js`)
 
 Add the import and state at the top. Put the rest after `const markdown = …` (around line 255): `createMissionsView` takes `markdown` by value, so it must come after that line.
 
@@ -2552,7 +2552,7 @@ and put `${mission}` right after `${marathon}` in the status text. In `runComman
 
 In `marathonCommand`, after the gemini/auto check, add `if (activeMission) return note('a mission is running: finish or cancel it first');`.
 
-- [ ] **Step 4: Styles** (append to `app/styles.css`; `spark:ui-taste` sets the final values)
+- [x] **Step 4: Styles** (append to `app/styles.css`; `spark:ui-taste` sets the final values)
 
 ```css
 #bar .actions button.on { background: color-mix(in srgb, var(--c2) 28%, transparent); }
@@ -2607,7 +2607,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--c1); text-de
 }
 ```
 
-- [ ] **Step 5: Screenshot check**
+- [x] **Step 5: Screenshot check**
 
 `renderer.js` is a module, and Chromium won't load module imports from a `file://` page. So serve `app/` over http: write a short `node:http` static server in `%TEMP%\spark-shots\serve.mjs` that takes the folder as an argument, run `cd app; npm run stage`, start the server, and open it in Playwright. Before the page scripts run, inject a stub `window.spark` with these canned answers:
 - `missions()`: one finished mission with a report, and one running.
@@ -2618,7 +2618,7 @@ Open the view, then fire `review` to show the criteria card. Take screenshots at
 
 Check them against `spark:ui-taste`: hierarchy, spacing, contrast, the empty state, long titles. Fix what's off.
 
-- [ ] **Step 6: Run all checks and commit**
+- [x] **Step 6: Run all checks and commit**
 
 Run: `cd app; npm test`, then the root `npm test` and `npm run check`. Expected: PASS.
 
@@ -2639,7 +2639,7 @@ git commit -m "Missions: criteria card, header status and the Missions view"
 - Consumes: Tasks 2–5.
 - Produces: `/mission <objective> | approve | cancel`, the `spark:mission` pane, and the state key `spark.mission: { id: string; root: string; status: Status } | null`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // plugin/test/mission-terminal.test.ts
@@ -2735,12 +2735,12 @@ test('/mission refuses a second mission while one is live, and cancel ends it', 
 
 Before writing these, look at how `plugin/test/register.test.ts` drives `turn.complete` and how panes are opened in tests (`ui.open`). If either shape differs from the calls above, match the existing tests. Mission work after `turn.complete` runs off the hook's path, so the tests advance the fake clock and await before asserting.
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `claude plugin test plugin`
 Expected: FAIL: `/mission` is unknown.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `plugin/types/index.d.ts`: add `import type { Status } from '../hooks/mission'` at the top, and in `PluginState.spark` add `mission: { id: string; root: string; status: Status } | null`.
 
@@ -2945,11 +2945,11 @@ async function missionTurn($: EngineInterface, answer: string) {
   })
 ```
 
-- [ ] **Step 4: Run all checks**
+- [x] **Step 4: Run all checks**
 
 Run: `claude plugin test plugin`, `npm run check`, the root `npm test`, and `cd app; npm test`. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugin/hooks/register.tsx plugin/types/index.d.ts plugin/test/mission-terminal.test.ts
@@ -2965,7 +2965,7 @@ git commit -m "Missions: /mission in the terminal with the same records and repo
 - Modify: `docs/superpowers/specs/2026-10-10-missions-foundation-design.md`: update anything the build changed from what it says.
 - Create (outside the repo): `%TEMP%\spark-e2e\mission-e2e.mjs`
 
-- [ ] **Step 1: README**
+- [x] **Step 1: README**
 
 Add to "The app" list:
 
@@ -2995,7 +2995,7 @@ Add this section after Marathons:
 
 Under Guardrails, add to both Test gate (F4) and Halt (F10): "Each run, counted build and halt is also written to `.spark/gate.jsonl` for mission reports. Claude can't edit `.spark/`, and commands that name its records are blocked."
 
-- [ ] **Step 2: End-to-end run (real Claude Code, haiku)**
+- [x] **Step 2: End-to-end run (real Claude Code, haiku)**
 
 Write `%TEMP%\spark-e2e\mission-e2e.mjs`. It does this:
 
@@ -3017,7 +3017,7 @@ Expected:
 
 Compare every report line by hand with `events.jsonl` and the repo's `git diff`.
 
-- [ ] **Step 3: The window, for real**
+- [x] **Step 3: The window, for real**
 
 Run: `cd app; npm start`. In the scratch repo:
 - run a mission end to end
@@ -3027,12 +3027,12 @@ Run: `cd app; npm start`. In the scratch repo:
 
 Write down anything that doesn't match the spec, and fix it test first.
 
-- [ ] **Step 4: Full verification**
+- [x] **Step 4: Full verification**
 
 Run: the root `npm test`, `npm run check`, and `cd app; npm test`.
 Expected: all pass, with counts above the baseline (launcher 79, mod 117, app 85).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md docs/superpowers/specs/2026-10-10-missions-foundation-design.md

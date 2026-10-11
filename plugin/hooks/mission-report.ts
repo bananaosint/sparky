@@ -208,7 +208,7 @@ export function reportSections(r: unknown): Section[] {
     {
       heading: 'Time and cost',
       lines: [
-        { text: `${typeof wall === 'number' ? `${clock(wall)} since approval · ` : ''}Claude worked ${clock(Number(field(time, 'workedMs')) || 0)}` },
+        { text: `${typeof wall === 'number' ? `${clock(wall)} since approval · ` : ''}Claude worked ${clock(Number(field(time, 'workedMs')) || 0)}, drafting included` },
         {
           text:
             typeof usd === 'number'

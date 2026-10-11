@@ -40,6 +40,7 @@ It installs Claude Code too if it's missing, downloads the latest Spark installe
   Sparky's answers in the window (Gemini and Auto) also come in 2 to 4 headed sections of 3 to 6 bullets. The thread's timer and "done in" line read `mm:ss`, or `hh:mm:ss` past an hour. Drag the effort bar from low to max (arrow keys work; hovering previews how charged Sparky gets); `/model sonnet` and `/effort high` still work. Every switch charges Sparky up.
 - **Modes:** `/antislop` (also `/red-team`, `/grillme`) turns a Spark mode on for every message; its chip turns it off. Other `/commands` go straight to Claude Code.
 - **Marathons:** `/marathon <task> [--time 1.5h] [--tokens 2m]` keeps Claude working on a task, in short review passes, until the time or the tokens run out, even when the task looks finished. See [Marathons](#marathons).
+- **Missions:** `/mission <objective>` (or **Missions** in the header) has Claude read the project and draft acceptance criteria without changing anything. You edit and approve them, Claude does the work, and Spark records what happened: tool calls, your approvals, test-gate runs, builds, halts, cost. The mission ends with a report built from those records, next to Claude's own account, which is marked unverified. See [Missions](#missions).
 - **What it costs, and who pays:** after each turn: the API-rate price Claude Code reports, the model, tokens in and out, tool calls, and whether it counts toward your Claude plan (not billed per message) or is billed to an API key. Gemini answers say they run on your Gemini key's project.
 - **Header:** the folder you're in, the model answering, the effort level.
 - **Settings:** turn off Gemini's rewriting, its skill picks, or both; pick Auto's models and UltraCode's model.
@@ -62,6 +63,23 @@ Spark keeps Claude Code's own configuration, sign-in, and Spark's guardrails (MI
 What it costs: every model switch makes Claude re-read the whole conversation at full price, because the prompt cache belongs to one model. Passes that find nothing still cost tokens. The time limit is the only bound on them besides the token cap.
 
 What it doesn't cover: time spent waiting on a permission card counts, so turn on auto-accept edits in settings for an unattended run. Shell commands that change files aren't seen as edits. A Spark halt (two failures in a row) isn't visible to the app, so a halted marathon keeps sending passes. The terminal version has no `/marathon` yet.
+
+## Missions
+
+`/mission rate-limit the login route` starts one. The draft step runs in Claude Code's plan mode, which lets only read-only tools and read-only commands (such as `git ls-files`) run without asking; Spark refuses every edit and every command that would need your approval until you approve the criteria. A card lists the drafted criteria, each with how it gets checked; edit, add or remove them, then **Approve and start**.
+
+- **Records** go to `.spark/missions/<id>/` in the repo, kept out of git: `mission.json`, `events.jsonl` and, at the end, `report.json`. Secrets are redacted, and only the tail of a failed tool's output is kept. **Missions** in the header lists them, with each one's timeline.
+- **The report** says:
+  - whether the tests passed on exactly the code the mission ended with
+  - which files changed, from snapshots pinned at `refs/spark/missions/<id>/start` and `/end`
+  - the commands run, and every test-gate run and build
+  - what you allowed and denied
+  - the time and cost Claude Code reported
+
+  Spark doesn't check the criteria themselves yet: each one says "not checked by Spark", or "needs you" if it's manual. Claude's own summary is shown beside the report and marked unverified.
+- **Stopping:** ■ pauses a mission, and Resume carries on in the same session. Closing Spark, New chat or another folder interrupts it, and Resume picks it up later. If the session can't be resumed, the next Resume starts a fresh one.
+- **One at a time:** a mission and a marathon don't run together, and missions need Claude Code (not Gemini or Auto).
+- **In the terminal:** `/mission <objective>` fills the prompt box with the draft request; `/mission approve` fills it with the run request; `/mission cancel` ends it; `/mission` opens the pane. The terminal can't see costs or your permission answers, has no criteria editor and no Resume.
 
 ## Terminal version
 
@@ -105,6 +123,7 @@ These prompts are sent as typed instead:
 | `/spark-restore [N]` | List turn snapshots, or restore one (asks first; the current state is snapshotted, so it can be undone) |
 | `/spark-fix` | Send the last failed `spark try` command to Claude |
 | `/goal <goal> [--time 30m] [--tokens 500k]` | Work toward a goal: after each turn Gemini compares the changes with the goal and puts the next step in the prompt box (Enter sends it, or edit it). Ends when you press `6` (goal met) or `7` (stop), or at the time or token limit, counted across the whole goal. `/goal` shows progress, `/goal stop` ends it |
+| `/mission <objective> \| approve \| cancel` | A mission: Claude drafts acceptance criteria read-only, you approve, Spark records the work and ends with a report (see [Missions](#missions)); bare `/mission` opens its pane |
 | `/spark-agents` | Pane with subagents and worktrees; test a worktree, then merge it once its tests pass |
 | `/spark-unhalt` | Lift a halt once the post-mortem is written (see Guardrails) |
 | `/thinking-red-team` | Toggle adversarial security review of proposed changes |
@@ -168,6 +187,7 @@ These run in every Spark session, in the terminal and in the app. The design is 
   { "repos": { "C:\\code\\invoice-app": { "test": "npm test -- --reporter=dot" } } }
   ```
 - **Halt after two failures (F10):** two failed test-gate runs or builds in a row halt the session. A command line counts as a build when its last command is one: `npm run build` (and `build:*`), `pnpm build`, `yarn build`, `tsc`, `vite build`, `dotnet build`, `msbuild`, `cargo build` or `go build`. Edits are denied except under `docs/postmortems/`, commands the gate would ask about are blocked, and every prompt carries `<spark-halt>`. Run `/spark:postmortem` to have Claude write the post-mortem, then `/spark-unhalt`, which works once a post-mortem newer than the halt exists.
+- **Mission records:** each test-gate run, counted build and halt is also written to `.spark/gate.jsonl`, with a hash of the code it ran on, for mission reports. Claude can't edit anything under `.spark/`, and commands that name its records are blocked. The gate reads text, so an obfuscated command could still get past it.
 - **Leaner context (F5):** a successful command's output over 200 lines reaches Claude as its first 40 and last 120 lines, colors stripped and progress redraws collapsed. The full output is saved to `.spark/out/<id>.txt`, which Spark adds to `.git/info/exclude`. Claude can't Read lockfiles, minified files, or anything under `node_modules`, `dist`, `build` or `obj`.
 - **Saved plans (F7):** a plan you approve in plan mode is saved to `docs/design/YYYY-MM-DD--<title>--design.md` at the repo root.
 - **UI taste (F8):** the `spark:ui-taste` skill sets rules for type, space, color, copy and empty/loading/error states, with a screenshot check at 375 and 1440 px. Spark's rules tell Claude to load it for UI work.

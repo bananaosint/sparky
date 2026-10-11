@@ -78,6 +78,8 @@ test('rows and sections survive hostile files from disk', () => {
   const sections = reportSections(buildReport(done(), records, { inRepo: true, endTree: T, now: 99_000 }))
   expect(sections.map((s) => s.heading)).toEqual(['Status', 'Criteria', 'Changed files', 'Commands run', 'Checks', 'Approvals', 'Time and cost', "Claude's account (not verified by Spark)"])
   expect(sections.at(-1)?.markdown).toBe(true)
+  // Worked time counts the draft turn too, so it can exceed the time since approval: say so.
+  expect(sections.find((s) => s.heading === 'Time and cost')?.lines[0]?.text).toBe('1:00 since approval · Claude worked 0:50, drafting included')
 })
 
 test('clock reads m:ss, or h:mm:ss past an hour', () => {
