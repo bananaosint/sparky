@@ -24,8 +24,8 @@ export async function openMissions({ cwd, write, notify, now, hex4 }) {
     }
     const missions = createMissionRunner({ store: createStore(root), write, notify, run: inRepo ? gitIn(root) : undefined, now, hex4 });
     missions.recover();
-    return { missions };
+    return { missions, root };
   } catch (err) {
-    return { error: err.message };
+    return { error: err.message, root: cwd };
   }
 }

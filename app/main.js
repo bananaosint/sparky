@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -16,6 +16,8 @@ import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
 import { openMissions } from './lib/mission-open.js';
 import { missionRequest } from './lib/mission-ipc.js';
+import { createCouncilIo } from './lib/council-io.js';
+import { createCouncils } from './lib/council-session.js';
 import { cookPrompt, quickAnswer } from './lib/cook.js';
 import { DEFAULT_AUTO_MODELS, CLAUDE_AUTO_MODELS, isClaude, autoAnswer, runClaude } from './lib/auto.js';
 import { sessionModelArgs, reviewDue, REVIEW_PASS } from './lib/ultracode.js';
@@ -69,6 +71,21 @@ let turnEdited = false;
 const autoChildren = new Set();
 // Missions for the open folder (lib/mission-runner.js), made again when the folder changes.
 let missions;
+// Councils for the open folder (lib/council-session.js), and the OpenRouter key they may use.
+let councils;
+let openrouterKey;
+const SPARK_DATA = join(process.env.APPDATA ?? homedir(), 'spark');
+const OPENROUTER_KEY = join(SPARK_DATA, 'openrouter.key');
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+// Unbiased order for the blind letters.
+const shuffle = (n) => {
+  const order = [...Array(n).keys()];
+  for (let i = n - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+};
 
 const send = (channel, data) => win?.webContents.send(channel, data);
 const rgb = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
@@ -89,6 +106,8 @@ function settings() {
     autoChoices: AUTO_CHOICES,
     ultraChoices: ULTRA_CHOICES,
     hasKey: Boolean(geminiKey),
+    hasOpenRouterKey: Boolean(openrouterKey),
+    councilBudgetUsd: Number.isFinite(c.councilBudgetUsd) && c.councilBudgetUsd >= 0 ? c.councilBudgetUsd : 1,
   };
 }
 
@@ -113,6 +132,26 @@ async function openFolderMissions() {
   });
   missions = opened.missions;
   if (opened.error) send('mission', { kind: 'error', error: `missions are off in this folder: ${opened.error}` });
+  // Claude one-shots in a council never inherit the Gemini key from the environment.
+  const env = { ...process.env };
+  delete env.SPARK_GEMINI_KEY;
+  councils = createCouncils({
+    root: opened.root,
+    makeIo: (dataCollection) =>
+      createCouncilIo({ spawn, keys: { openrouter: openrouterKey, gemini: geminiKey }, cwd, scratch: tmpdir(), env, cachePath: join(SPARK_DATA, 'council-catalog.json'), dataCollection }),
+    notify: (message) => send('council', message),
+    now: Date.now,
+    hex4: () => randomBytes(2).toString('hex'),
+    shuffle,
+    sleep: wait,
+    deadline: wait,
+    consents: () => loadConfig().councilConsent ?? {},
+    saveConsent: (provider, dataCollection) => {
+      const c = loadConfig();
+      saveConfig({ ...c, councilConsent: { ...(c.councilConsent ?? {}), [provider]: { at: Date.now(), dataCollection } } });
+    },
+    budgetUsd: () => settings().councilBudgetUsd,
+  });
 }
 
 // Claude Code asks before a tool runs; the bridge server relays the question here.
@@ -254,6 +293,7 @@ ipcMain.on('ready', async () => {
   const fromArgs = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && isFolder(a));
   const last = loadConfig().lastFolder;
   geminiKey = loadKey() ?? undefined;
+  openrouterKey = loadKey(OPENROUTER_KEY) ?? undefined;
   bridge ??= await startBridge();
   cwd = fromArgs ? resolve(fromArgs) : last && isFolder(last) ? last : await chooseFolder();
   folderMode = cwd && (await decideTrust(cwd));
@@ -398,9 +438,15 @@ ipcMain.handle('toggle-theme', () => {
   return look(next);
 });
 
-ipcMain.handle('set-settings', (_e, { key, ...changes }) => {
-  const known = ['cook', 'pickSkills', 'autoEdits', 'model', 'effort', 'autoModels', 'ultraModel'];
+ipcMain.handle('set-settings', (_e, { key, openrouterKey: orKey, ...changes }) => {
+  const known = ['cook', 'pickSkills', 'autoEdits', 'model', 'effort', 'autoModels', 'ultraModel', 'councilBudgetUsd'];
+  if (changes.councilBudgetUsd !== undefined && !(Number.isFinite(changes.councilBudgetUsd) && changes.councilBudgetUsd >= 0)) delete changes.councilBudgetUsd;
   saveConfig({ ...loadConfig(), ...Object.fromEntries(Object.entries(changes).filter(([name, v]) => known.includes(name) && v !== undefined)) });
+  if (orKey !== undefined) {
+    if (orKey) saveKey(orKey, OPENROUTER_KEY);
+    else clearKey(OPENROUTER_KEY);
+    openrouterKey = orKey || undefined;
+  }
   // A different Claude model or effort takes a restart; the conversation carries on.
   const wanted = sessionModelArgs(settings());
   if (wanted && JSON.stringify(wanted) !== JSON.stringify(runningArgs) && cwd) startClaude({ resume: sessionId });
@@ -410,6 +456,29 @@ ipcMain.handle('set-settings', (_e, { key, ...changes }) => {
     geminiKey = key || undefined;
   }
   return settings();
+});
+
+// Councils: the pre-flight returns the brief and panel to approve; Run starts it in the background
+// and its progress arrives on the 'council' channel.
+ipcMain.handle('council-preflight', async (_e, { question, mode } = {}) => {
+  if (!councils) return { error: 'no folder is open' };
+  if (mode !== 'light' && mode !== 'full') return { error: 'a council is light or full' };
+  if (!String(question ?? '').trim()) return { error: 'a council needs a question: /council <question>' };
+  try {
+    return await councils.preflight(String(question).trim(), mode);
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+ipcMain.handle('council-run', (_e, { id, ...options } = {}) => councils?.run(id, options) ?? { error: 'no folder is open' });
+ipcMain.handle('council-cancel', (_e, id) => councils?.cancel(id) ?? { error: 'no folder is open' });
+ipcMain.handle('councils', () => councils?.list() ?? []);
+ipcMain.handle('council-mission', (_e, id) => {
+  const plan = councils?.toMission(id);
+  if (!plan) return { error: 'no folder is open' };
+  if (plan.error) return plan;
+  if (!missions) return { error: 'missions are off in this folder' };
+  return missions.fromPlan(plan.objective, plan.criteria, plan.plan, { sessionId });
 });
 
 ipcMain.on('open-external', (_e, url) => /^https?:\/\//.test(url) && shell.openExternal(url));
