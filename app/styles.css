@@ -1849,3 +1849,247 @@ button.link {
     grid-column: 1;
   }
 }
+
+/* ---------- council ---------- */
+
+.council-card {
+  margin: 12px 0;
+  padding: 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c4) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: enter 200ms ease-out;
+}
+
+.council-card h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #929db3;
+}
+
+.council-card h5 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+
+.council-card p {
+  margin: 0;
+}
+
+.council-brief summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.brief-body {
+  margin-top: 8px;
+  max-width: 72ch;
+  color: #b7c0d4;
+}
+
+.brief-body pre,
+.council-card .proposal pre {
+  white-space: pre-wrap;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.council-panel,
+.council-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.council-panel th,
+.council-matrix th {
+  text-align: left;
+  font-weight: 600;
+  color: #929db3;
+  padding: 4px 8px 6px 0;
+  white-space: nowrap;
+}
+
+.council-panel td,
+.council-matrix td {
+  padding: 6px 8px 6px 0;
+  vertical-align: top;
+  border-top: 1px solid color-mix(in srgb, var(--c3) 18%, transparent);
+}
+
+.council-panel .why {
+  color: #b7c0d4;
+  max-width: 34ch;
+}
+
+.model-name,
+.model-id {
+  display: block;
+}
+
+.model-id {
+  font-size: 11.5px;
+  color: #7d879c;
+}
+
+.seat-state {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c3) 25%, transparent);
+}
+
+.seat-state.running {
+  background: color-mix(in srgb, var(--c1) 25%, transparent);
+}
+
+.seat-state.done {
+  color: #7ef0b8;
+  background: color-mix(in srgb, #7ef0b8 14%, transparent);
+}
+
+.seat-state.failed,
+.seat-state.timed-out {
+  color: #ff8a9c;
+  background: color-mix(in srgb, #ff8a9c 14%, transparent);
+}
+
+.seat-state.unavailable {
+  color: #ffce54;
+  background: color-mix(in srgb, #ffce54 12%, transparent);
+}
+
+.seat-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #929db3;
+}
+
+.council-facts {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.council-facts .warn,
+.council-card li.warn {
+  color: #ffce54;
+}
+
+.council-card .fail {
+  color: #ff8a9c;
+}
+
+.council-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #ffce54 40%, transparent);
+}
+
+.council-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 24px;
+  font-size: 13px;
+}
+
+.council-card .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.council-card .yes {
+  align-self: flex-start;
+  background: linear-gradient(135deg, var(--c2), var(--c3));
+  border-color: transparent;
+}
+
+.council-card .no {
+  align-self: flex-start;
+  background: transparent;
+}
+
+.council-matrix .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.council-matrix tr.lead td:first-child {
+  color: #7ef0b8;
+  font-weight: 700;
+}
+
+.council-case {
+  margin-bottom: 8px !important;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.gallery details,
+.combos li {
+  margin: 4px 0;
+}
+
+.gallery summary {
+  cursor: pointer;
+}
+
+.combos {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.synthesis {
+  max-width: 76ch;
+}
+
+.council-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.synthesis h1,
+.synthesis h2,
+.synthesis h3,
+.council-card .proposal h1,
+.council-card .proposal h2,
+.council-card .proposal h3 {
+  margin: 16px 0 4px;
+  font-size: 15px;
+}
+
+.synthesis pre,
+.council-card .proposal pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}

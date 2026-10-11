@@ -58,7 +58,7 @@
       <textarea
         id="input"
         rows="1"
-        placeholder="Ask Sparky to build something…   Enter: Gemini rewrites, Enter again sends · Tab Tab sends as typed · Shift+Enter new line · /mission, /marathon, /model"
+        placeholder="Ask Sparky to build something…   Enter: Gemini rewrites, Enter again sends · Tab Tab sends as typed · Shift+Enter new line · /mission, /council, /marathon, /model"
       ></textarea>
       <div class="composer-bar">
         <button type="button" id="engine" class="engine" popovertarget="engine-panel" title="Who answers, and how hard it thinks">
@@ -106,6 +106,13 @@
           <input id="key" type="password" placeholder="paste a key from aistudio.google.com/apikey" />
         </label>
         <p class="hint" id="key-state"></p>
+        <label class="row">OpenRouter API key, for Council's open and free models
+          <input id="or-key" type="password" placeholder="paste a key from openrouter.ai/keys" />
+        </label>
+        <p class="hint" id="or-key-state"></p>
+        <label class="row">Council: the most one run may spend on paid models, in US dollars
+          <input id="council-cap" type="number" min="0" step="0.25" />
+        </label>
         <label class="check"><input id="cook" type="checkbox" /> Rewrite my prompts with Gemini before sending</label>
         <label class="check"><input id="pick-skills" type="checkbox" /> Let Gemini pick the skills Claude should use</label>
         <label class="check"><input id="auto-edits" type="checkbox" /> Let Claude edit files without asking</label>

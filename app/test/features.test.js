@@ -136,3 +136,9 @@ test('/mission becomes a mission command with its arguments', () => {
   assert.deepEqual(parseCommand('/mission rate-limit the login route'), { kind: 'mission', args: 'rate-limit the login route' });
   assert.deepEqual(parseCommand('/mission'), { kind: 'mission', args: '' });
 });
+
+test('/council is Light by default; /council full is Full', () => {
+  assert.deepEqual(parseCommand('/council compare two cache designs'), { kind: 'council', mode: 'light', question: 'compare two cache designs' });
+  assert.deepEqual(parseCommand('/council full compare two cache designs'), { kind: 'council', mode: 'full', question: 'compare two cache designs' });
+  assert.deepEqual(parseCommand('/council'), { kind: 'council', mode: 'light', question: '' });
+});

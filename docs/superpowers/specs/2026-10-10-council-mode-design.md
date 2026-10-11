@@ -101,7 +101,7 @@ Default weights out of 100: outcome and requirements 25, correctness and compati
 ## Privacy
 
 - **Consent** is per provider (OpenRouter, Gemini, Ollama is local and needs none). It is stored in `%APPDATA%\spark\config.json` as `councilConsent: { openrouter: { at, dataCollection } }`. The card says that the brief and code excerpts go to that provider, and that free endpoints often keep or train on prompts.
-- **OpenRouter data collection.** The default is `deny`: OpenRouter routes only to endpoints that don't keep prompts, which can leave fewer free models. The card shows how many discovered models each choice leaves. If you pick `allow`, it is remembered with your consent.
+- **OpenRouter data collection.** The default is `deny`: OpenRouter routes only to endpoints that don't keep prompts, which can leave fewer free models. The models catalog doesn't carry each endpoint's data policy, so the card can't count them in advance; a model with no allowed endpoint answers *unavailable*, and the card shows that. If you pick `allow`, it is remembered with your consent.
 - **What leaves the machine** is only the redacted brief, a proposal packet and the blind proposals. Never whole files, `.env` files or keys. The brief's excerpts are chosen by Claude, capped and redacted, and shown to you in full before you consent.
 - **Records** stay in `.spark/councils/<id>.json`.
 

@@ -7,6 +7,7 @@ import { doubleTab } from './lib/keys.js';
 import { voxelize, project, closeEyes } from './lib/voxel.js';
 import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
 import { createMissionsView } from './lib/missions-view.js';
+import { councilCard } from './lib/council-view.js';
 
 const $ = (id) => document.getElementById(id);
 function el(tag, cls, text) {
@@ -660,6 +661,26 @@ setInterval(() => {
   missionsView.tick();
 }, 1000);
 
+// ---------- councils ----------
+
+// Councils run beside the chat: the composer stays free, and each council's card updates itself.
+const councilCards = new Map();
+
+async function councilCommand(mode, question) {
+  input.value = '';
+  autosize();
+  if (!question) return note('a council needs a question: /council [full] <question>');
+  const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1 });
+  card.waiting(`${mode === 'full' ? 'Full' : 'Light'} council: Claude is reading the project to write the brief. Nothing leaves this machine until you approve the pre-flight.`);
+  append(card.node);
+  const out = await spark.councilPreflight(question, mode);
+  if (out.error) return card.failed(out.error);
+  councilCards.set(out.id, card);
+  card.update(out);
+}
+
+spark.on('council', (m) => councilCards.get(m.id)?.update(m.council));
+
 spark.on('permission', ({ id, tool, input, note }) => {
   const card = el('div', 'permission');
   card.append(el('div', 'ask', `Claude wants to use ${tool}`), el('div', 'what', summary(tool, input)), details(tool, input));
@@ -873,6 +894,10 @@ function runCommand(text) {
   }
   if (command.kind === 'mission') {
     missionCommand(command.args);
+    return true;
+  }
+  if (command.kind === 'council') {
+    councilCommand(command.mode, command.question);
     return true;
   }
   if (command.kind === 'mode') {
@@ -1244,19 +1269,29 @@ $('gear').addEventListener('click', () => {
   );
   $('key').value = '';
   $('key-state').textContent = settings.hasKey ? 'A key is saved (encrypted for your Windows account). Paste a new one to replace it.' : 'No key yet: without one, prompts are sent as typed.';
+  $('or-key').value = '';
+  $('or-key-state').textContent = settings.hasOpenRouterKey
+    ? 'A key is saved (encrypted for your Windows account). Paste a new one to replace it.'
+    : 'No key yet: Council then uses only Claude, Gemini and any local Ollama models.';
+  $('council-cap').value = String(settings.councilBudgetUsd ?? 1);
   $('settings').showModal();
 });
 $('save-settings').addEventListener('click', async () => {
   const key = $('key').value.trim();
+  const openrouterKey = $('or-key').value.trim();
+  const cap = Number($('council-cap').value);
   const autoModels = [...$('auto-models').querySelectorAll('input:checked')].map((box) => box.value);
   if (!autoModels.length) return note('pick at least one model for Auto');
+  if (!Number.isFinite(cap) || cap < 0) return note('the Council cap is a dollar amount, 0 or more');
   await setSetting({
     cook: $('cook').checked,
     pickSkills: $('pick-skills').checked,
     autoEdits: $('auto-edits').checked,
     autoModels,
     ultraModel: $('ultra-model').value,
+    councilBudgetUsd: cap,
     ...(key ? { key } : {}),
+    ...(openrouterKey ? { openrouterKey } : {}),
   });
   $('settings').close();
 });
