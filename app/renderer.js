@@ -8,6 +8,7 @@ import { voxelize, project, closeEyes } from './lib/voxel.js';
 import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
 import { createMissionsView } from './lib/missions-view.js';
 import { createChangesView } from './lib/changes-view.js';
+import { busyAfter } from './lib/mission-busy.js';
 import { councilCard } from './lib/council-view.js';
 
 const $ = (id) => document.getElementById(id);
@@ -715,16 +716,15 @@ function planEditor(mission) {
 
 spark.on('mission', (m) => {
   if (m.kind === 'state') {
+    const next = busyAfter(m, { busy, activeId: activeMission?.id ?? null });
     if (m.active) activeMission = m.mission;
     else if (activeMission?.id === m.mission.id) activeMission = null;
-    // A mission that just went to running has a turn in flight (Resume, an answer): ■ must show.
-    if (m.active && m.mission.status === 'running' && !busy) {
-      turnTools = 0;
-      setBusy(true);
-    }
+    if (next === true) turnTools = 0;
+    if (next !== undefined) setBusy(next);
     renderStatus();
     missionsView.update(m.mission);
   }
+  if (m.kind === 'checking') append(el('div', 'result', `◆ mission: Spark is checking task ${m.task}…`));
   if (m.kind === 'row') missionsView.addRow(m.id, m.row);
   if (m.kind === 'review') {
     setBusy(false);
