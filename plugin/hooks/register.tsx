@@ -46,6 +46,13 @@ import {
 import type { GateCheck, Mission, MissionRecord } from './mission'
 import { buildReport, describe, gitFacts, reportSections } from './mission-report'
 import type { Row } from './mission-report'
+import { CLAUDE_CANDIDATES, briefPrompt, normalizeGemini, normalizeOllama, normalizeOpenRouter, parseBrief } from './council'
+import type { Candidate, Mode } from './council'
+import { BRIEF_SYSTEM, councilId, missionPlan, panelOf, preflightRecord, runRefusal } from './council-flow'
+import type { Preflight } from './council-flow'
+import { callError, claudeArgv, geminiRequest, ollamaRequest, openrouterRequest, parseClaude, parseGemini, parseOllama, parseOpenRouter, retryAfterMs } from './council-providers'
+import { runCouncil } from './council-run'
+import type { Call, CouncilRecord } from './council-run'
 import { pruneOutput, readDenied } from './prune'
 import { classify, mergeTargets, parseVerdict, previewArgv } from './gate'
 import type { Preview } from './gate'
@@ -296,11 +303,13 @@ const STREAK = { plugin: 'spark', key: 'streak' } as const
 const HALT = { plugin: 'spark', key: 'halt' } as const
 const VERDICTS = { plugin: 'spark', key: 'verdicts' } as const
 const MISSION = { plugin: 'spark', key: 'mission' } as const
+const OPENROUTER_KEY = { plugin: 'spark', key: 'openrouterKey' } as const
 
 const DIFF_PANE = 'spark:diff'
 const AGENTS_PANE = 'spark:agents'
 // ui.open ids are letters, digits, _ and - only.
 const MISSION_PANE = 'spark-mission'
+const COUNCIL_PANE = 'spark-council'
 const TONE: Record<Row['tone'], string | undefined> = { ok: '#4ADE80', fail: ERROR, warn: '#FACC15', info: undefined }
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // The pane is for a glance; past this it says how many lines it left out.
@@ -318,6 +327,7 @@ const COMMANDS = [
   { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
   { name: 'spark-unhalt', description: 'Spark: lift the halt once the post-mortem is written' },
   { name: 'mission', description: 'Spark: work toward criteria you approve, with a recorded report', argumentHint: '<objective> | approve | cancel' },
+  { name: 'council', description: 'Spark: several models propose, others judge blind, one synthesizes', argumentHint: '[full] <question> | run | cancel | mission' },
   {
     name: 'goal',
     description: 'Spark: work toward a goal; after each turn Gemini reviews the changes and proposes the next step',
@@ -616,6 +626,178 @@ async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: 
   if (FINAL.has(done.mission.status)) await missionReport($, at.root, done.mission)
 }
 
+// ---------- /council in the terminal: the shared steps, with $.http and $.process as the I/O ----------
+
+// The council this session runs, kept in the module: its record can be large, and only the pane reads it.
+let councilNow: { record: Preflight & { run?: CouncilRecord; reduced?: boolean }; root: string; controller?: AbortController } | undefined
+
+async function councilKeys($: EngineInterface) {
+  return { openrouter: await read($, OPENROUTER_KEY), gemini: await read($, KEY) }
+}
+
+// One model call for the orchestrator. Claude runs as a one-shot `claude -p`: in the project with
+// read-only tools for the brief and the synthesis, in the temp folder with no tools for the rest.
+function terminalCall($: EngineInterface, keys: { openrouter?: string; gemini?: string }, cwd: string, dataCollection: 'deny' | 'allow'): Call {
+  return async (seat, role, request) => {
+    const { id, provider } = seat.candidate
+    if (provider === 'claude') {
+      const readOnly = role === 'brief' || role === 'synth'
+      const scratch = (await $.env.get('TEMP')) ?? cwd
+      const r = await $.process.run(['claude', ...claudeArgv(id, request.system, { readOnly })], { cwd: readOnly ? cwd : scratch, stdin: request.user, timeoutMs: 600_000 })
+      let json: unknown
+      try {
+        json = JSON.parse(r.stdout)
+      } catch {
+        throw callError(undefined, `claude exited with ${r.exitCode}`)
+      }
+      return parseClaude(json)
+    }
+    const { url, init } =
+      provider === 'openrouter'
+        ? openrouterRequest(id, request, { key: keys.openrouter ?? '', dataCollection })
+        : provider === 'gemini'
+          ? geminiRequest(id, request, { key: keys.gemini ?? '' })
+          : ollamaRequest(id, request)
+    const res = await $.http.fetch(url, init).catch((err) => {
+      throw callError(undefined, `network: ${message(err)}`)
+    })
+    let body: unknown = {}
+    try {
+      body = JSON.parse(res.text)
+    } catch {}
+    if (!res.ok) {
+      const error = (body as { error?: { message?: unknown } }).error?.message
+      throw Object.assign(callError(res.status, typeof error === 'string' ? error : `HTTP ${res.status}`), { waitMs: retryAfterMs(res.headers['retry-after']) })
+    }
+    return provider === 'openrouter' ? parseOpenRouter(body) : provider === 'gemini' ? parseGemini(body) : parseOllama(body)
+  }
+}
+
+// The terminal fetches catalogs each time; the app keeps them for 6 hours.
+async function councilCatalogs($: EngineInterface, keys: { openrouter?: string; gemini?: string }) {
+  const candidates: Candidate[] = [...CLAUDE_CANDIDATES]
+  const notes: string[] = []
+  const fetchJson = async (url: string, headers: Record<string, string>) => {
+    const res = await $.http.fetch(url, { headers })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return JSON.parse(res.text) as unknown
+  }
+  const sources: [string, string | undefined, () => Promise<unknown>, (j: unknown) => Candidate[]][] = [
+    ['openrouter', keys.openrouter, () => fetchJson('https://openrouter.ai/api/v1/models', { authorization: `Bearer ${keys.openrouter}` }), normalizeOpenRouter],
+    ['gemini', keys.gemini, () => fetchJson('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', { 'x-goog-api-key': keys.gemini ?? '' }), normalizeGemini],
+  ]
+  for (const [name, key, get, normalize] of sources) {
+    if (!key) {
+      notes.push(`${name}: no key`)
+      continue
+    }
+    try {
+      candidates.push(...normalize(await get()))
+    } catch (err) {
+      notes.push(`${name}: catalog not reachable (${message(err)})`)
+    }
+  }
+  try {
+    candidates.push(...normalizeOllama(await fetchJson('http://127.0.0.1:11434/api/tags', {})))
+  } catch {
+    notes.push('ollama: not running')
+  }
+  return { candidates, notes }
+}
+
+const saveCouncil = ($: EngineInterface, root: string, record: unknown) =>
+  queued(async () => {
+    const id = (record as { id: string }).id
+    await $.fs.write(`${root}/.spark/councils/${id}.json`, `${JSON.stringify(record, null, 2)}\n`)
+    if (inRepo) await ignoreSparkDir($)
+  })
+
+// Running a council from the pane is the consent it asked for: remembered in Spark's config,
+// where the app keeps it too.
+async function rememberCouncilConsent($: EngineInterface, providers: readonly string[], dataCollection: 'deny' | 'allow') {
+  const appData = await $.env.get('APPDATA')
+  if (!appData || !providers.length) return
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, unknown> }
+  const at = await $.clock.now()
+  const councilConsent = { ...(config.councilConsent ?? {}), ...Object.fromEntries(providers.map((p) => [p, { at, dataCollection }])) }
+  await $.fs.write(`${appData}/spark/config.json`, `${JSON.stringify({ ...config, councilConsent }, null, 2)}\n`)
+}
+
+async function councilPreflight($: EngineInterface, question: string, mode: Mode) {
+  const root = await repoTop($)
+  const keys = await councilKeys($)
+  const call = terminalCall($, keys, root, 'deny')
+  const sonnet = CLAUDE_CANDIDATES.find((c) => c.id === 'sonnet')!
+  const reply = await call({ candidate: sonnet, reason: 'writes the brief' }, 'brief', { system: BRIEF_SYSTEM, user: briefPrompt(question), maxTokens: 6000 }, new AbortController().signal)
+  const brief = parseBrief(reply.text)
+  if (!brief) throw new Error('the brief came back without a brief block; ask again with a clearer question')
+  const { candidates, notes } = await councilCatalogs($, keys)
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, unknown> }
+  const at = await $.clock.now()
+  const record = preflightRecord({ id: councilId(at, hex4()), question, mode, at, brief, ...(reply.usd === undefined ? {} : { briefCost: reply.usd }), candidates, notes, consents: config.councilConsent ?? {} })
+  councilNow = { record, root }
+  await saveCouncil($, root, record)
+  $.ui.invalidate('ui.render')
+  await openPane($, COUNCIL_PANE, 'council')
+}
+
+async function councilRun($: EngineInterface) {
+  const c = councilNow
+  if (!c || c.record.run) return '✦ no council is waiting to run'
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, { dataCollection?: string }>; councilBudgetUsd?: unknown }
+  const budget = typeof config.councilBudgetUsd === 'number' && config.councilBudgetUsd >= 0 ? config.councilBudgetUsd : 1
+  const refusal = runRefusal(c.record, { consent: true, reduced: true }, budget)
+  if (refusal) return `✦ ${refusal}`
+  const dataCollection = config.councilConsent?.openrouter?.dataCollection === 'allow' ? 'allow' : 'deny'
+  await queued(() => rememberCouncilConsent($, c.record.consentNeeded, dataCollection)).catch(() => {})
+  const controller = new AbortController()
+  c.controller = controller
+  c.record = { ...c.record, consentNeeded: [], reduced: c.record.empty.length > 0 }
+  const shuffle = (n: number) => {
+    const order = [...Array(n).keys()]
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[order[i], order[j]] = [order[j]!, order[i]!]
+    }
+    return order
+  }
+  const keep = (record: CouncilRecord) => {
+    c.record = { ...c.record, run: record }
+    $.ui.invalidate('ui.render')
+    return saveCouncil($, c.root, c.record).catch(() => {})
+  }
+  void runCouncil({
+    brief: c.record.brief,
+    panel: panelOf(c.record),
+    mode: c.record.mode,
+    call: terminalCall($, await councilKeys($), c.root, dataCollection),
+    notify: ({ record }) => void keep(record),
+    shuffle,
+    sleep: (ms) => $.clock.sleep(ms),
+    deadline: (ms) => $.clock.sleep(ms),
+    signal: controller.signal,
+  })
+    .then(keep)
+    .catch((err) => $.ui.toast(`✦ council: ${message(err)}`))
+  return '✦ council running: the pane shows each model as it answers'
+}
+
+async function councilMission($: EngineInterface) {
+  const c = councilNow
+  if (!c) return '✦ no council in this session'
+  const plan = missionPlan(c.record)
+  if ('error' in plan) return `✦ ${plan.error}`
+  const at = await read($, MISSION)
+  if (at && !FINAL.has(at.status)) return `✦ a mission is ${at.status}: /mission cancel ends it first`
+  return queued(async () => {
+    const root = await repoTop($)
+    const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
+    const { mission, record } = newMission(plan.objective, await $.clock.now(), hex4(), gateOffset, { criteria: plan.criteria, plan: plan.plan })
+    await saveMission($, root, mission, [record])
+    return `✦ mission created from the council with ${criteriaCount(mission.criteria.length)}: /mission shows them, /mission approve starts it`
+  })
+}
+
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // F7: the approved plan goes to docs/design/ at the repo root (the working directory outside a repo).
@@ -829,6 +1011,11 @@ export const register: Register = (on, options) => {
       await $.state.set(KEY, key)
       await $.env.set('SPARK_GEMINI_KEY', undefined)
     }
+    const openrouter = await $.env.get('SPARK_OPENROUTER_KEY')
+    if (openrouter) {
+      await $.state.set(OPENROUTER_KEY, openrouter)
+      await $.env.set('SPARK_OPENROUTER_KEY', undefined)
+    }
     await $.command.register({ name: 'thinking-red-team', description: MODE_DESCRIPTIONS['thinking-red-team'] })
     await $.command.register({ name: 'anti-slop', description: MODE_DESCRIPTIONS['anti-slop'] })
     await $.command.register({ name: 'spark-modes', description: 'Spark: show active modes, or "off" to clear them', argumentHint: '[off]' })
@@ -981,6 +1168,83 @@ export const register: Register = (on, options) => {
         .catch(() => {})
     }
     return done
+  })
+
+  on('command.run', { command: 'council' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    if (!args) return { text: '✦ /council [full] <question>; then /council run, /council cancel or /council mission' }
+    if (args === 'run') return { text: await councilRun($) }
+    if (args === 'mission') return { text: await councilMission($) }
+    if (args === 'cancel') {
+      if (councilNow?.record.run?.status !== 'running') return { text: '✦ no council is running' }
+      councilNow.controller?.abort()
+      return { text: '✦ council cancelled; finished answers are kept' }
+    }
+    if (councilNow?.record.run?.status === 'running') return { text: '✦ a council is running: /council cancel stops it' }
+    const full = /^full\b/i.test(args)
+    const question = full ? args.slice(4).trim() : args
+    if (!question) return { text: '✦ /council [full] <question>' }
+    void councilPreflight($, question, full ? 'full' : 'light').catch((err) => $.ui.toast(`✦ council not started: ${message(err)}`))
+    return { text: '✦ council: Claude is writing the brief (read-only); the pane shows the panel when it is ready. Nothing leaves this machine until /council run.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: COUNCIL_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const c = councilNow?.record
+    if (!c) return <Text dimColor>no council in this session</Text>
+    const run = c.run
+    const seats = [...c.panel.proposers.map((s) => ['proposer', s] as const), ...c.panel.judges.map((s) => ['judge', s] as const), ['synth', c.panel.synth] as const]
+    const STATE_TONE: Record<string, string | undefined> = { done: '#4ADE80', failed: ERROR, 'timed out': ERROR, unavailable: '#FACC15', running: '#38BDF8' }
+    const a = run?.aggregate
+    return (
+      <Box flexDirection="column">
+        <Text bold>
+          council · {c.mode} · {run ? `${run.status}${run.status === 'running' ? ` · ${run.stage}` : ''}` : 'waiting for /council run'}
+        </Text>
+        <Text>{c.question}</Text>
+        <Text dimColor>brief: {c.brief.objective}</Text>
+        <Box marginTop={1} flexDirection="column">
+          {seats.map(([role, s]) => {
+            const log = run?.seats[`${role}:${s.id}`]
+            const state = log?.state ?? 'selected'
+            return (
+              <Text color={STATE_TONE[state]}>{`${role.padEnd(8)} ${s.id} · ${s.estimate.label} · ${state}${log && log.tries > 1 ? ` (${log.tries} tries)` : ''}${log?.error && state !== 'done' ? ` · ${log.error}` : ''}`}</Text>
+            )
+          })}
+        </Box>
+        {c.empty.length ? <Text color="#FACC15">{`empty seats: ${c.empty.join(', ')}; /council run uses a reduced panel`}</Text> : null}
+        {c.notes.map((n) => (
+          <Text dimColor>{n}</Text>
+        ))}
+        {!run && c.consentNeeded.length ? <Text color="#FACC15">{`/council run sends the brief to ${c.consentNeeded.join(' and ')} (free endpoints may keep prompts); Spark remembers it`}</Text> : null}
+        {!run && c.estimate.meteredUsd > 0 ? <Text>{`paid models: ~$${c.estimate.meteredUsd.toFixed(2)} estimated`}</Text> : null}
+        {a ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>{`case: ${a.case} · ${a.judged} judges answered`}</Text>
+            {a.ranking.map((l) => (
+              <Text color={a.flags.some((f) => f.proposal === l) ? ERROR : undefined}>{`${l} ${run!.mapping[l] ?? ''}: mean ${a.mean[l]} · ${a.totals[l]!.join(' / ')} · Borda ${a.borda[l]}${a.flags.filter((f) => f.proposal === l).map((f) => ` · critical: ${f.issue}`).join('')}`}</Text>
+            ))}
+          </Box>
+        ) : null}
+        {run?.synthesis ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>synthesis</Text>
+            {run.synthesis
+              .split('\n')
+              .slice(0, 60)
+              .map((line) => (
+                <Text>{line}</Text>
+              ))}
+          </Box>
+        ) : null}
+        {run?.reason ? <Text color="#FACC15">{run.reason}</Text> : null}
+        <Box marginTop={1}>
+          {!run ? <Button key="council-run" label={c.empty.length ? 'run with a reduced panel' : 'run'} onPress={() => void councilRun($).then((t) => $.ui.toast(t))} /> : null}
+          {run?.status === 'running' ? <Button key="council-stop" label="stop" onPress={() => councilNow?.controller?.abort()} /> : null}
+          {run?.synthesis ? <Button key="council-mission" label="start as mission" onPress={() => void councilMission($).then((t) => $.ui.toast(t))} /> : null}
+        </Box>
+      </Box>
+    )
   })
 
   on('command.run', { command: 'mission' }, async ($, e) => {

@@ -27,6 +27,7 @@ declare module 'claude-code' {
       phase: CookPhase
       modes: ModeName[]
       geminiKey: string
+      openrouterKey: string
       sandbox: boolean
       turn: TurnRef | null
       review: TurnRef | null

@@ -24,7 +24,7 @@ export type Candidate = {
   version?: number
 }
 export type Mode = 'light' | 'full'
-export type Role = 'proposer' | 'judge' | 'synth'
+export type Role = 'brief' | 'proposer' | 'judge' | 'synth'
 export type Seat = { candidate: Candidate; reason: string; perspective?: string }
 export type Panel = { proposers: Seat[]; judges: Seat[]; synth: Seat; empty: string[] }
 

@@ -106,11 +106,14 @@ export async function runCouncil({
       signal.addEventListener('abort', relay, { once: true })
       let timedOut = false
       let settled = false
-      void deadline(timeoutMs).then(() => {
-        if (settled) return
-        timedOut = true
-        own.abort()
-      })
+      // The timer outlives a quick call; if its clock goes away (the session ends), that's fine.
+      void deadline(timeoutMs)
+        .then(() => {
+          if (settled) return
+          timedOut = true
+          own.abort()
+        })
+        .catch(() => {})
       let retry = false
       try {
         const reply = await Promise.race([call(seat, role, request, own.signal), aborted(own.signal)])
