@@ -249,6 +249,7 @@ export function createMissionRunner({ store, write, notify, run, verify, checkTa
       const criteria = approvedCriteria(active.criteria, sent);
       if (!criteria.length) return { error: 'a mission needs at least one criterion' };
       const tasks = active.tasks ? approvedPlan(active.tasks, sentTasks === undefined ? active.tasks : sentTasks) : [];
+      if (!Array.isArray(tasks)) return { error: tasks.error };
       const startSha = run ? await pinSnapshot(run, `refs/spark/missions/${id}/start`, `mission ${id} start`).catch(() => undefined) : undefined;
       if (active?.id !== id || active.status !== 'review') return { error: 'the mission changed while its snapshot was taken' };
       const base = { ...active, criteria };

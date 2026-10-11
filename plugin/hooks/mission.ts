@@ -3,6 +3,7 @@
 // loads this file through Node's type stripping, so runtime imports name their .ts file.
 import { redact } from './redact.ts'
 import { endsInQuestion } from './testgate.ts'
+import { isCommandHow } from './verify.ts'
 import type { CheckResult } from './verify.ts'
 import { removeTask, taskText, validatePlan } from './plan.ts'
 import type { Task, TaskRecord } from './plan.ts'
@@ -254,18 +255,24 @@ export function parseMissionBlock(text: string): Drafted | undefined {
 
 // What the window sends back on Approve: the tasks kept, each with its instructions and check as
 // edited. A task left out is removed and its dependents rewired; the result is checked again.
-export function approvedPlan(drafted: readonly Task[], sent: unknown): Task[] {
+// Fewer than 2 tasks is no plan, as the card says; an edit that doesn't hold together is an error.
+export function approvedPlan(drafted: readonly Task[], sent: unknown): Task[] | { error: string } {
   if (!Array.isArray(sent)) return []
   const edits = new Map(sent.map((s: unknown) => [String((s as Record<string, unknown>)?.id ?? ''), (s ?? {}) as Record<string, unknown>]))
-  if ([...edits.keys()].some((id) => !drafted.some((t) => t.id === id))) return []
+  const stranger = [...edits.keys()].find((id) => !drafted.some((t) => t.id === id))
+  if (stranger !== undefined) return { error: `the plan sent back names a task that was not drafted: ${clean(stranger, 40)}` }
   let tasks = [...drafted]
   for (const t of drafted) if (!edits.has(t.id)) tasks = removeTask(tasks, t.id)
   const edited = tasks.map((t) => {
     const e = edits.get(t.id)!
-    return { ...t, do: typeof e.do === 'string' ? e.do : t.do, check: typeof e.check === 'string' ? e.check : t.check }
+    const check = typeof e.check === 'string' ? e.check.trim() : t.check
+    return { ...t, do: typeof e.do === 'string' ? e.do : t.do, ...(check ? { check } : { check: undefined }) }
   })
+  const wrong = edited.find((t) => t.check && !isCommandHow(t.check))
+  if (wrong) return { error: `task ${wrong.id}'s check isn't a command Spark can run (${clean(wrong.check, 80)}): give a command, or leave it empty` }
+  if (edited.length < 2) return []
   const plan = validatePlan(edited)
-  return 'tasks' in plan ? plan.tasks : []
+  return 'tasks' in plan ? plan.tasks : plan
 }
 
 // What the window sends back on Approve: rows kept as drafted stay Claude's, the rest are yours.

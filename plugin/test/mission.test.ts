@@ -213,17 +213,23 @@ test('with tasks, the run text carries the spec and the plan and asks for the fi
   expect(runText(mission({ criteria: planned.criteria }))).not.toContain('Do only task')
 })
 
-test('approvedPlan: edits stay, a removed task is rewired around, a check that is not a command is dropped, under 2 tasks is no plan', () => {
+test('approvedPlan: edits stay and a removed task is rewired around; an edit that does not hold together is an error, not a silent drop', () => {
   const kept = approvedPlan(planned.tasks!, [
     { id: 't1', do: 'Add it per account', check: 'npm test -- limiter' },
-    { id: 't3', do: 'Write it up', check: 'look at it' },
+    { id: 't3', do: 'Write it up', check: '' },
   ])
+  if (!Array.isArray(kept)) throw new Error(kept.error)
   expect(kept.map((t) => [t.id, t.do, t.after, t.check])).toEqual([
     ['t1', 'Add it per account', [], 'npm test -- limiter'],
     ['t3', 'Write it up', ['t1'], undefined],
   ])
+  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }, { id: 't3', do: 'y', check: 'look at it' }])).toEqual({
+    error: "task t3's check isn't a command Spark can run (look at it): give a command, or leave it empty",
+  })
+  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: '' }, { id: 't3', do: 'y' }])).toEqual({ error: 'task t1 has no title or instructions' })
+  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }, { id: 'zz', do: 'new' }])).toEqual({ error: 'the plan sent back names a task that was not drafted: zz' })
+  // Fewer than 2 tasks left, or no list: the mission runs as one piece, as the card says.
   expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }])).toEqual([])
-  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }, { id: 'zz', do: 'new' }])).toEqual([])
   expect(approvedPlan(planned.tasks!, 'nope')).toEqual([])
 })
 

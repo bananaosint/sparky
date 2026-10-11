@@ -453,3 +453,15 @@ test("while Spark's checks run, no mission starts or is approved and no second p
   assert.equal(t.r.busy(), false);
   assert.equal(t.r.start('another objective').mission.status, 'draft');
 });
+
+test("an edited plan that doesn't hold together is refused with the reason; the mission stays in review", async () => {
+  const t = rig();
+  const { mission } = t.r.start('rate-limit the login route');
+  t.r.onEvent(result(PLANNED));
+  const out = await t.r.approve(mission.id, [{ text: 'A sixth failed login gets 429', how: 'npm test' }], [
+    { id: 't1', do: '', check: 'npm test -- limiter' },
+    { id: 't2', do: 'Say when to retry' },
+  ]);
+  assert.equal(out.error, 'task t1 has no title or instructions');
+  assert.equal(t.store.read(mission.id).mission.status, 'review');
+});
