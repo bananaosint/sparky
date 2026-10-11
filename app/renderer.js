@@ -675,7 +675,7 @@ async function councilCommand(mode, question) {
   input.value = '';
   autosize();
   if (!question) return note('a council needs a question: /council [full] <question>');
-  const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1 });
+  const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1, payer: () => who });
   card.waiting(`${mode === 'full' ? 'Full' : 'Light'} council: Claude is reading the project to write the brief. Nothing leaves this machine until you approve the pre-flight.`, () => spark.councilBriefCancel());
   append(card.node);
   const out = await spark.councilPreflight(question, mode);
@@ -699,7 +699,7 @@ async function councilList() {
     open.addEventListener('click', async () => {
       const council = await spark.councilView(c.id);
       if (!council) return note('that council file could not be read');
-      const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1 });
+      const card = councilCard({ el, markdown, spark, note, cap: () => settings.councilBudgetUsd ?? 1, payer: () => who });
       card.update(council);
       councilCards.set(c.id, card);
       append(card.node);

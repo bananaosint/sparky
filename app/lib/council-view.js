@@ -1,17 +1,19 @@
 // A council in the chat: first the pre-flight to approve, then the run as it happens, then the
 // result. Everything comes from the record main.js saves; nothing here guesses at a state.
 const ACCESS = {
-  'claude-plan': 'your Claude plan',
   'free-hosted': 'free hosted',
   'paid-hosted': 'paid hosted',
   'gemini-key': 'your Gemini key',
   local: 'local',
 };
 const ROLE = { proposer: 'proposes', judge: 'judges', synth: 'synthesizes' };
-const access = (s) => `${ACCESS[s.access] ?? s.access}${s.openWeights ? ', open weights' : ''}`;
 const money = (usd) => `$${usd.toFixed(usd < 0.1 ? 3 : 2)}`;
 
-export function councilCard({ el, markdown, spark, note, cap }) {
+// `payer()`: who pays for Claude (lib/account.js), as Claude Code's sign-in says; a council's
+// Claude calls run on the same sign-in.
+export function councilCard({ el, markdown, spark, note, cap, payer }) {
+  const access = (s) => `${s.access === 'claude-plan' ? payer().label : (ACCESS[s.access] ?? s.access)}${s.openWeights ? ', open weights' : ''}`;
+  const estimateOf = (s) => (s.access === 'claude-plan' ? (payer().billed ? 'billed to the key at API rates' : 'on your plan') : (s.estimate?.label ?? ''));
   const node = el('div', 'council-card');
   let council = null;
   let consent = false;
@@ -44,7 +46,7 @@ export function councilCard({ el, markdown, spark, note, cap }) {
       stateCell.append(el('span', `seat-state ${state.replace(' ', '-')}`, state));
       if (log?.tries > 1) stateCell.append(el('span', 'seat-note', `${log.tries} tries`));
       if (log?.error && state !== 'done') stateCell.append(el('span', 'seat-note', log.error));
-      row.append(el('td', '', `${ROLE[role]}${s.perspective ? ` · ${s.perspective}` : ''}`), model, el('td', '', access(s)), el('td', 'why', s.reason), el('td', '', s.estimate?.label ?? ''), stateCell);
+      row.append(el('td', '', `${ROLE[role]}${s.perspective ? ` · ${s.perspective}` : ''}`), model, el('td', '', access(s)), el('td', 'why', s.reason), el('td', '', estimateOf(s)), stateCell);
       table.append(row);
     }
     const wrap = el('div', 'table-wrap');
@@ -76,7 +78,7 @@ export function councilCard({ el, markdown, spark, note, cap }) {
     for (const n of council.notes ?? []) facts.append(el('li', '', n));
     if (council.empty.length) facts.append(el('li', 'warn', `Empty seats: ${council.empty.join(', ')}. No proposer is reused as a judge to fill them.`));
     if (council.freeLeft !== undefined) facts.append(el('li', council.freeLeft < council.estimate.freeCalls ? 'warn' : '', `OpenRouter free requests left today: ${council.freeLeft} (this run needs about ${council.estimate.freeCalls})`));
-    facts.append(el('li', council.estimate.meteredUsd > cap() ? 'warn' : '', `Paid models: ~${money(council.estimate.meteredUsd)} estimated, against your ${money(cap())} cap. Claude calls are on your plan; Gemini doesn't report cost.`));
+    facts.append(el('li', council.estimate.meteredUsd > cap() ? 'warn' : '', `Paid models: ~${money(council.estimate.meteredUsd)} estimated, against your ${money(cap())} cap. Claude calls: ${payer().note}. Gemini doesn't report cost.`));
     parts.push(facts);
     if (council.consentNeeded.length) {
       const box = el('div', 'council-consent');
@@ -198,7 +200,7 @@ export function councilCard({ el, markdown, spark, note, cap }) {
     for (const [key, l] of Object.entries(r.seats)) if (typeof l.usd === 'number') byProvider[providerOf[key]] = (byProvider[providerOf[key]] ?? 0) + l.usd;
     if (typeof council.briefCost === 'number') byProvider.claude = (byProvider.claude ?? 0) + council.briefCost;
     const cost = el('ul');
-    for (const [p, usd] of Object.entries(byProvider)) cost.append(el('li', '', p === 'claude' ? `Claude: ${money(usd)} at API rates, on your plan` : p === 'openrouter' ? `OpenRouter: ${money(usd)} in credits` : `${p}: ${money(usd)}`));
+    for (const [p, usd] of Object.entries(byProvider)) cost.append(el('li', '', p === 'claude' ? `Claude: ${money(usd)} at API rates; ${payer().note}` : p === 'openrouter' ? `OpenRouter: ${money(usd)} in credits` : `${p}: ${money(usd)}`));
     if (seats().some(([, s]) => s.provider === 'gemini')) cost.append(el('li', '', 'Gemini: not reported (your key)'));
     const out = [line('', `${ok.length} calls answered, ${bad.length} did not.${council.reduced ? ' Reduced panel.' : ''}${r.reason ? ` ${r.status}: ${r.reason}.` : ''}`)];
     if (bad.length) {
