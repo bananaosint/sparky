@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import {
-  DRAFT_DENIED, approvedCriteria, asMission, criteriaCount, draftText, isMissionId, isSessionId, missionId, move, newMission,
+  DRAFT_DENIED, approvedCriteria, approvedPlan, asMission, asRecord, criteriaCount, draftText, isMissionId, isSessionId, missionId, move, newMission,
   onTurnEnd, parseGateLines, parseMissionBlock, processRecord, recordsFor, resumeFailed, resumeText, runText, turnEnded,
 } from '../hooks/mission'
 import type { Mission, MissionRecord } from '../hooks/mission'
@@ -168,4 +168,71 @@ test('a mission from a council plan starts in review with its criteria, and its 
   expect(runText(m)).toContain('Plan (from Council):\n## Decision\nhybrid of A and C')
   expect(asMission({ ...m, plan: 'x'.repeat(30_000) })!.plan!.length).toBeLessThanOrEqual(20_001)
   expect(asMission({ ...m, plan: 42 })!.plan).toBeUndefined()
+})
+
+const PLANNED = `I read it.\n\`\`\`mission\n${JSON.stringify({
+  title: 'Rate-limit login',
+  spec: `Per account, 15 minutes. token=ghp_${'d'.repeat(36)}`,
+  criteria: [{ text: 'sixth login gets 429', how: 'npm test -- auth' }],
+  tasks: [
+    { id: 't1', title: 'Limiter', do: 'Add it', after: [], check: 'npm test -- limiter' },
+    { id: 't2', title: 'Message', do: 'Say when', after: ['t1'] },
+    { id: 't3', title: 'Docs', do: 'Write it up', after: ['t2'], check: 'npm run docs' },
+  ],
+})}\n\`\`\``
+const planned = parseMissionBlock(PLANNED)!
+
+test('a draft may carry a short spec and a task plan; a plan that does not hold together is dropped, and the reason says so', () => {
+  expect(planned.spec).toContain('Per account')
+  expect(planned.spec).not.toContain('ghp_')
+  expect(planned.tasks!.map((t) => t.id)).toEqual(['t1', 't2', 't3'])
+  const broken = PLANNED.replace('"after":["t1"]', '"after":["t9"]')
+  const bad = parseMissionBlock(broken)!
+  expect(bad.tasks).toBeUndefined()
+  expect(bad.planError).toBe('task t2 waits for t9, which is not an earlier task')
+  expect(bad.criteria).toHaveLength(1)
+  const done = turnEnded(mission(), [], { ok: true, text: PLANNED }, [], 0, AT + 5)
+  expect(done.mission.status).toBe('review')
+  expect(done.mission.spec).toContain('Per account')
+  expect(done.mission.tasks).toHaveLength(3)
+  expect(done.records.at(-1)).toMatchObject({ reason: '1 criterion and 3 tasks drafted' })
+  expect(turnEnded(mission(), [], { ok: true, text: broken }, [], 0, AT + 5).records.at(-1)).toMatchObject({
+    reason: '1 criterion drafted; the task plan was dropped: task t2 waits for t9, which is not an earlier task',
+  })
+  expect(draftText('x')).toContain('"tasks"')
+})
+
+test('with tasks, the run text carries the spec and the plan and asks for the first task only; resume names the current task', () => {
+  const m = mission({ status: 'running', approvedAt: AT, criteria: planned.criteria, spec: planned.spec!, tasks: planned.tasks! })
+  const text = runText(m)
+  expect(text).toContain('Spec:\nPer account')
+  expect(text).toContain('t2. Message (after t1)')
+  expect(text).toContain('t1. Limiter (check: npm test -- limiter)')
+  expect(text.endsWith('Do only task t1 (Limiter) now: Add it\nIts check: npm test -- limiter. End your turn when it is done.')).toBe(true)
+  expect(resumeText(m, m.tasks![1])).toContain('Do only task t2 (Message) now: Say when')
+  expect(runText(mission({ criteria: planned.criteria }))).not.toContain('Do only task')
+})
+
+test('approvedPlan: edits stay, a removed task is rewired around, a check that is not a command is dropped, under 2 tasks is no plan', () => {
+  const kept = approvedPlan(planned.tasks!, [
+    { id: 't1', do: 'Add it per account', check: 'npm test -- limiter' },
+    { id: 't3', do: 'Write it up', check: 'look at it' },
+  ])
+  expect(kept.map((t) => [t.id, t.do, t.after, t.check])).toEqual([
+    ['t1', 'Add it per account', [], 'npm test -- limiter'],
+    ['t3', 'Write it up', ['t1'], undefined],
+  ])
+  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }])).toEqual([])
+  expect(approvedPlan(planned.tasks!, [{ id: 't1', do: 'x' }, { id: 'zz', do: 'new' }])).toEqual([])
+  expect(approvedPlan(planned.tasks!, 'nope')).toEqual([])
+})
+
+test('a plan and task records from disk: a hostile plan is dropped, a long spec clipped, task records must be well-formed', () => {
+  const ok = mission({ spec: 'short', tasks: planned.tasks! })
+  expect(asMission(JSON.parse(JSON.stringify(ok)))).toEqual(ok)
+  expect(asMission({ ...ok, tasks: [{ id: '../x', title: 'x', do: 'x', after: [] }, { id: 't2', title: 'x', do: 'x', after: ['t2'] }] })!.tasks).toBeUndefined()
+  // 1500 characters and the ellipsis clip() adds, as the Council plan is clipped.
+  expect(asMission({ ...ok, spec: 'x'.repeat(5000) })!.spec!.length).toBeLessThanOrEqual(1501)
+  expect(asRecord({ at: 1, kind: 'task', id: 't1', event: 'done', attempt: 1 })).toBeDefined()
+  for (const bad of [{ at: 1, kind: 'task', id: 't1', event: 'won', attempt: 1 }, { at: 1, kind: 'task', id: '../x', event: 'done', attempt: 1 }]) expect(asRecord(bad)).toBeUndefined()
 })

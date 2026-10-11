@@ -4,6 +4,8 @@
 import { redact } from './redact.ts'
 import { endsInQuestion } from './testgate.ts'
 import type { CheckResult } from './verify.ts'
+import { removeTask, taskText, validatePlan } from './plan.ts'
+import type { Task, TaskRecord } from './plan.ts'
 
 export type Status = 'draft' | 'review' | 'running' | 'waiting' | 'paused' | 'interrupted' | 'finished' | 'blocked' | 'cancelled'
 export type Criterion = { text: string; how: string; by: 'claude' | 'you' }
@@ -26,6 +28,10 @@ export type Mission = {
   gateOffset: number
   // A Council synthesis the mission started from; the run text carries it.
   plan?: string
+  // A substantial mission's short spec and its task plan (plan.ts), drafted and approved with
+  // the criteria. Spark drives the tasks one turn at a time.
+  spec?: string
+  tasks?: Task[]
 }
 export type Decision = 'allowed' | 'always' | 'denied' | 'auto-allowed' | 'auto-denied'
 export type GateCheck = 'tests' | 'build' | 'halt'
@@ -44,7 +50,9 @@ export type MissionRecord =
   // the working tree as it was then rather than as the mission ended.
   | { at: number; kind: 'verify'; again: boolean }
   | ({ at: number; kind: 'check' } & CheckResult)
-export type TurnEnd = { to: Status; reason: string; drafted?: { title: string; criteria: Criterion[] } }
+  | TaskRecord
+export type Drafted = { title: string; criteria: Criterion[]; spec?: string; tasks?: Task[]; planError?: string }
+export type TurnEnd = { to: Status; reason: string; drafted?: Drafted }
 
 const STATUSES: readonly Status[] = ['draft', 'review', 'running', 'waiting', 'paused', 'interrupted', 'finished', 'blocked', 'cancelled']
 export const FINAL: ReadonlySet<Status> = new Set<Status>(['finished', 'blocked', 'cancelled'])
@@ -214,8 +222,11 @@ export function parseGateLines(text: string): MissionRecord[] {
   })
 }
 
-// The criteria Claude drafted, from the last ```mission block in its answer.
-export function parseMissionBlock(text: string): { title: string; criteria: Criterion[] } | undefined {
+const SPEC_CHARS = 1500
+
+// The criteria Claude drafted, from the last ```mission block in its answer, with the optional
+// spec and task plan. A plan that doesn't hold together is dropped and `planError` says why.
+export function parseMissionBlock(text: string): Drafted | undefined {
   const block = [...text.matchAll(/```mission[^\n]*\n([\s\S]*?)```/g)].at(-1)?.[1]
   if (!block) return undefined
   let j: Record<string, unknown> | null
@@ -231,7 +242,29 @@ export function parseMissionBlock(text: string): { title: string; criteria: Crit
     return [{ text: clean(x.text.trim(), 500), how: typeof x.how === 'string' && x.how.trim() ? clean(x.how.trim(), 300) : 'manual', by: 'claude' }]
   })
   if (!criteria.length) return undefined
-  return { title: typeof j.title === 'string' ? clean(j.title.trim(), 80) : '', criteria }
+  const plan = validatePlan(j.tasks)
+  return {
+    title: typeof j.title === 'string' ? clean(j.title.trim(), 80) : '',
+    criteria,
+    ...(typeof j.spec === 'string' && j.spec.trim() ? { spec: clean(j.spec.trim(), SPEC_CHARS) } : {}),
+    ...('error' in plan ? { planError: plan.error } : plan.tasks.length ? { tasks: plan.tasks } : {}),
+  }
+}
+
+// What the window sends back on Approve: the tasks kept, each with its instructions and check as
+// edited. A task left out is removed and its dependents rewired; the result is checked again.
+export function approvedPlan(drafted: readonly Task[], sent: unknown): Task[] {
+  if (!Array.isArray(sent)) return []
+  const edits = new Map(sent.map((s: unknown) => [String((s as Record<string, unknown>)?.id ?? ''), (s ?? {}) as Record<string, unknown>]))
+  if ([...edits.keys()].some((id) => !drafted.some((t) => t.id === id))) return []
+  let tasks = [...drafted]
+  for (const t of drafted) if (!edits.has(t.id)) tasks = removeTask(tasks, t.id)
+  const edited = tasks.map((t) => {
+    const e = edits.get(t.id)!
+    return { ...t, do: typeof e.do === 'string' ? e.do : t.do, check: typeof e.check === 'string' ? e.check : t.check }
+  })
+  const plan = validatePlan(edited)
+  return 'tasks' in plan ? plan.tasks : []
 }
 
 // What the window sends back on Approve: rows kept as drafted stay Claude's, the rest are yours.
@@ -262,7 +295,15 @@ export const draftText = (objective: string) =>
     '```',
     '',
     'Each criterion is one outcome a test, a command or a person can check. Use "manual" only when a person has to judge it. Don\'t call ExitPlanMode: the block is the plan, and Spark shows it for approval.',
+    '',
+    'If the change is substantial (several files or steps), add two fields to the same block:',
+    '"spec": "<under 1500 characters: requirements, constraints, risks, data or API changes>",',
+    '"tasks": [{"id": "t1", "title": "<short>", "do": "<what to do>", "after": [], "check": "<a command that shows this task is done, or leave it out>"}]',
+    'with 2 to 10 tasks; "after" lists only earlier task ids. Spark sends the tasks one at a time. Leave both out for a small change.',
   ].join('\n')
+
+const planLines = (tasks: readonly Task[]) =>
+  tasks.map((t) => `${t.id}. ${t.title}${t.after.length ? ` (after ${t.after.join(', ')})` : ''}${t.check ? ` (check: ${t.check})` : ''}`)
 
 export const runText = (m: Mission) =>
   [
@@ -273,11 +314,25 @@ export const runText = (m: Mission) =>
     'Acceptance criteria (approved):',
     ...listed(m),
     ...(m.plan ? ['', 'Plan (from Council):', m.plan] : []),
-    '',
-    'Do the work until every criterion is met, or until you are blocked and need me. When you finish, end with what you changed, the commands you ran and their results, and for each criterion whether you believe it is met and why. Spark records what actually happened and reports it next to your account.',
+    ...(m.spec ? ['', 'Spec:', m.spec] : []),
+    ...(m.tasks?.length
+      ? [
+          '',
+          'Tasks:',
+          ...planLines(m.tasks),
+          '',
+          "Spark sends the tasks one at a time and runs each task's check. When you end a task's turn, say what you changed and what you ran. Spark records what actually happened and reports it next to your account.",
+          '',
+          taskText(m.tasks[0]!),
+        ]
+      : [
+          '',
+          'Do the work until every criterion is met, or until you are blocked and need me. When you finish, end with what you changed, the commands you ran and their results, and for each criterion whether you believe it is met and why. Spark records what actually happened and reports it next to your account.',
+        ]),
   ].join('\n')
 
-export const resumeText = (m: Mission) =>
+// `current`: the task the mission was on, sent again.
+export const resumeText = (m: Mission, current?: Task) =>
   [
     `Resuming mission: ${m.title}`,
     '',
@@ -285,15 +340,20 @@ export const resumeText = (m: Mission) =>
     '',
     'Acceptance criteria:',
     ...listed(m),
+    ...(m.tasks?.length ? ['', 'Tasks:', ...planLines(m.tasks)] : []),
     '',
     "Check the current state of the project before doing more; don't redo finished work. End the same way: what changed, what you ran, and where each criterion stands.",
+    ...(current ? ['', taskText(current)] : []),
   ].join('\n')
 
 // What a draft or running mission becomes when a turn ends. `halted`: Spark halted since approval.
 export function onTurnEnd(m: Mission, turn: { ok: boolean; text: string }, halted: boolean): TurnEnd {
   if (m.status === 'draft') {
     const drafted = turn.ok ? parseMissionBlock(turn.text) : undefined
-    if (drafted) return { to: 'review', reason: `${criteriaCount(drafted.criteria.length)} drafted`, drafted }
+    if (drafted) {
+      const what = drafted.tasks ? `${criteriaCount(drafted.criteria.length)} and ${drafted.tasks.length} tasks` : criteriaCount(drafted.criteria.length)
+      return { to: 'review', reason: `${what} drafted${drafted.planError ? `; the task plan was dropped: ${drafted.planError}` : ''}`, drafted }
+    }
     return { to: 'review', reason: turn.ok ? 'no mission block came back; write the criteria' : 'the draft turn failed; write the criteria' }
   }
   if (!turn.ok) return { to: 'blocked', reason: `the turn failed: ${clean(turn.text || 'no message', 200)}` }
@@ -315,7 +375,16 @@ export function turnEnded(
   const since = m.approvedAt
   const halted = since !== undefined && [...earlier, ...gates].some((r) => r.kind === 'gate' && r.check === 'halt' && r.at >= since)
   const end = onTurnEnd(m, turn, halted)
-  const base: Mission = { ...m, gateOffset, ...(end.drafted ? { title: end.drafted.title || m.title, criteria: end.drafted.criteria } : {}) }
+  const base: Mission = { ...m, gateOffset }
+  const d = end.drafted
+  // A draft replaces the spec and plan of an earlier draft, or leaves the mission without them.
+  if (d) {
+    Object.assign(base, { title: d.title || m.title, criteria: d.criteria })
+    delete base.spec
+    delete base.tasks
+    if (d.spec) base.spec = d.spec
+    if (d.tasks) base.tasks = d.tasks
+  }
   const moved = move(base, end.to, end.reason, at)
   return { mission: moved.mission, records: [...gates, moved.record] }
 }
@@ -327,7 +396,8 @@ export function resumeFailed(records: readonly MissionRecord[]) {
   return a?.kind === 'process' && a.event === 'resumed' && b?.kind === 'process' && b.event === 'exited'
 }
 
-const KINDS: ReadonlySet<string> = new Set(['status', 'you', 'tool', 'tool-result', 'permission', 'turn', 'gate', 'model', 'process', 'verify', 'check'])
+const KINDS: ReadonlySet<string> = new Set(['status', 'you', 'tool', 'tool-result', 'permission', 'turn', 'gate', 'model', 'process', 'verify', 'check', 'task'])
+const TASK_EVENTS: ReadonlySet<string> = new Set(['started', 'retry', 'done', 'failed'])
 // A check record's status feeds the verdict, so an unknown one is not let through.
 const CHECK_STATUSES: ReadonlySet<string> = new Set(['pass', 'fail', 'timed-out', 'not-run'])
 
@@ -336,6 +406,7 @@ const CHECK_STATUSES: ReadonlySet<string> = new Set(['pass', 'fail', 'timed-out'
 export function asRecord(j: unknown): MissionRecord | undefined {
   const r = (j ?? {}) as Record<string, unknown>
   if (r.kind === 'check' && !(typeof r.name === 'string' && CHECK_STATUSES.has(String(r.status)))) return undefined
+  if (r.kind === 'task' && !(typeof r.id === 'string' && /^[A-Za-z][\w-]{0,19}$/.test(r.id) && TASK_EVENTS.has(String(r.event)) && typeof r.attempt === 'number')) return undefined
   return typeof r.at === 'number' && KINDS.has(String(r.kind)) ? (r as MissionRecord) : undefined
 }
 
@@ -366,6 +437,11 @@ export function asMission(j: unknown): Mission | undefined {
     startSha: sha(m.startSha),
     endSha: sha(m.endSha),
     plan: typeof m.plan === 'string' ? clip(m.plan, PLAN_CHARS) : undefined,
+    spec: typeof m.spec === 'string' ? clip(m.spec, SPEC_CHARS) : undefined,
+    tasks: (() => {
+      const plan = validatePlan(m.tasks)
+      return 'tasks' in plan && plan.tasks.length ? plan.tasks : undefined
+    })(),
   }
   for (const [key, value] of Object.entries(optional)) if (value !== undefined) Object.assign(mission, { [key]: value })
   return mission
