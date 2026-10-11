@@ -196,3 +196,38 @@ test('in a git repo: start and end are pinned, files come from numstat, tests pa
   assert.deepEqual(back.report.files, [{ path: 'auth.js', added: 1, removed: 0 }]);
   assert.equal(git('rev-parse', `refs/spark/missions/${t.id}/end`).stdout.trim(), back.mission.endSha);
 });
+
+test('review fixes: an exit error is redacted before it is kept', async () => {
+  const t = await approved();
+  const key = `sk-${'b'.repeat(30)}`;
+  t.r.exited(1, `auth failed for ${key}`);
+  const exit = t.store.read(t.id).records.find((x) => x.kind === 'process' && x.event === 'exited');
+  assert.ok(!exit.error.includes(key));
+});
+
+test('review fixes: detaching tells the window the mission is no longer this window\'s', async () => {
+  const t = await approved();
+  t.r.stopped();
+  t.r.interrupted('you started a new chat', { detach: true });
+  const last = t.told.filter((x) => x.kind === 'state' && x.mission.id === t.id).at(-1);
+  assert.equal(last.active, false);
+  const live = rig();
+  live.r.start('rate-limit the login route');
+  live.r.interrupted('you opened another folder', { detach: true });
+  const lastLive = live.told.filter((x) => x.kind === 'state').at(-1);
+  assert.equal(lastLive.mission.status, 'interrupted');
+  assert.equal(lastLive.active, false);
+});
+
+test('review fixes: recover keeps going past a mission it cannot save', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'spark-runner-'));
+  const first = await approved({ root });
+  const store = createStore(root);
+  createMissionRunner({ store, write: () => {}, notify: () => {}, now: () => Date.now(), hex4: () => 'cafe' }).start('another objective');
+  const stuck = first.id;
+  const picky = { ...store, save: (m) => (m.id === stuck ? (() => { throw new Error('EPERM: read-only'); })() : store.save(m)), append: (id, r) => (id === stuck ? undefined : store.append(id, r)) };
+  const again = createMissionRunner({ store: picky, write: () => {}, notify: () => {}, now: () => Date.now(), hex4: () => 'cafe' });
+  assert.doesNotThrow(() => again.recover());
+  const other = store.list().find((m) => m.id !== stuck);
+  assert.equal(other.status, 'interrupted');
+});

@@ -14,6 +14,7 @@ import {
   move,
   newMission,
   permissionRecord,
+  processRecord,
   recordsFor,
   resumeFailed,
   resumeText,
@@ -89,7 +90,11 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
 
   function interrupted(reason, { detach = false } = {}) {
     if (active && LIVE.has(active.status)) step(active, 'interrupted', reason);
-    if (detach) active = null;
+    if (!detach || !active) return;
+    // The window keeps a mission in its header until it hears this one is no longer its own.
+    const left = active;
+    active = null;
+    notify({ kind: 'state', mission: left, active: false });
   }
 
   return {
@@ -110,8 +115,7 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
       if (!active) return;
       if (event.kind === 'init' && (event.sessionId !== active.sessionId || event.model !== active.model))
         commit({ ...active, ...(isSessionId(event.sessionId) ? { sessionId: event.sessionId } : {}), ...(event.model ? { model: event.model } : {}) });
-      if (event.kind === 'control' && event.id === PLAN && !event.ok)
-        record(active, [{ at: now(), kind: 'process', event: 'plan-mode-refused', error: String(event.error ?? '') }]);
+      if (event.kind === 'control' && event.id === PLAN && !event.ok) record(active, [processRecord('plan-mode-refused', now(), { error: event.error })]);
       record(active, recordsFor(event, now()));
       if (event.kind === 'result') turnEnd(event);
     },
@@ -154,7 +158,7 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
 
     exited(code, error) {
       if (!active) return;
-      record(active, [{ at: now(), kind: 'process', event: 'exited', ...(typeof code === 'number' ? { code } : {}), ...(error ? { error: String(error).slice(-500) } : {}) }]);
+      record(active, [processRecord('exited', now(), { code, error })]);
       interrupted('Claude Code stopped');
     },
 
@@ -176,7 +180,7 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
       const fresh = !isSessionId(m.sessionId) || resumeFailed(found?.records ?? []);
       active = m;
       restart(fresh ? undefined : m.sessionId);
-      record(m, [{ at: now(), kind: 'process', event: fresh ? 'started' : 'resumed' }]);
+      record(m, [processRecord(fresh ? 'started' : 'resumed', now())]);
       if (m.approvedAt === undefined) {
         const next = step(m, 'draft', 'drafting again');
         draft(next.objective);
@@ -188,8 +192,15 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
     },
 
     // On opening a folder nothing runs yet, so a mission still marked live was cut off.
+    // A mission that can't be written (a read-only folder from the repo) is left as it is; the
+    // others are still marked.
     recover() {
-      for (const m of store.list()) if (!m.unreadable && LIVE.has(m.status)) step(m, 'interrupted', 'Spark closed while it ran');
+      for (const m of store.list()) {
+        if (m.unreadable || !LIVE.has(m.status)) continue;
+        try {
+          step(m, 'interrupted', 'Spark closed while it ran');
+        } catch {}
+      }
     },
 
     list: () => store.list(),

@@ -630,6 +630,11 @@ spark.on('mission', (m) => {
   if (m.kind === 'state') {
     if (m.active) activeMission = m.mission;
     else if (activeMission?.id === m.mission.id) activeMission = null;
+    // A mission that just went to running has a turn in flight (Resume, an answer): ■ must show.
+    if (m.active && m.mission.status === 'running' && !busy) {
+      turnTools = 0;
+      setBusy(true);
+    }
     renderStatus();
     missionsView.update(m.mission);
   }

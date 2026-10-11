@@ -143,6 +143,12 @@ export function recordsFor(e: StreamEvent, at: number): MissionRecord[] {
 
 export const youRecord = (text: string, at: number): MissionRecord => ({ at, kind: 'you', text: clean(text, 500) })
 
+// Claude Code's stderr and control errors can echo a key back: redacted like everything else.
+export const processRecord = (event: 'started' | 'resumed' | 'exited' | 'plan-mode-refused', at: number, { code, error }: { code?: number; error?: unknown } = {}): MissionRecord => {
+  const text = error === undefined ? '' : clean(String(error).slice(-500), 500)
+  return { at, kind: 'process', event, ...(typeof code === 'number' ? { code } : {}), ...(text ? { error: text } : {}) }
+}
+
 export const permissionRecord = (tool: string, input: Record<string, unknown> | undefined, decision: Decision, at: number, gate?: string): MissionRecord => ({
   at,
   kind: 'permission',
@@ -259,7 +265,7 @@ export function onTurnEnd(m: Mission, turn: { ok: boolean; text: string }, halte
     if (drafted) return { to: 'review', reason: `${criteriaCount(drafted.criteria.length)} drafted`, drafted }
     return { to: 'review', reason: turn.ok ? 'no mission block came back; write the criteria' : 'the draft turn failed; write the criteria' }
   }
-  if (!turn.ok) return { to: 'blocked', reason: `the turn failed: ${clip(turn.text || 'no message', 200)}` }
+  if (!turn.ok) return { to: 'blocked', reason: `the turn failed: ${clean(turn.text || 'no message', 200)}` }
   if (halted) return { to: 'blocked', reason: 'halted after two failed test or build runs' }
   if (endsInQuestion(turn.text)) return { to: 'waiting', reason: 'Claude asked you a question' }
   return { to: 'finished', reason: 'Claude finished the work' }

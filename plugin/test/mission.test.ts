@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import {
   DRAFT_DENIED, approvedCriteria, asMission, criteriaCount, draftText, isMissionId, isSessionId, missionId, move, newMission,
-  onTurnEnd, parseGateLines, parseMissionBlock, recordsFor, resumeFailed, resumeText, runText, turnEnded,
+  onTurnEnd, parseGateLines, parseMissionBlock, processRecord, recordsFor, resumeFailed, resumeText, runText, turnEnded,
 } from '../hooks/mission'
 import type { Mission, MissionRecord } from '../hooks/mission'
 
@@ -142,6 +142,17 @@ test('mission.json from disk: hostile values are dropped, not passed on', () => 
   expect(hostile?.startSha).toBeUndefined()
   expect(hostile?.criteria).toEqual([{ text: 'a', how: 'b', by: 'claude' }])
   for (const bad of [null, 'x', { ...ok, id: '../x' }, { ...ok, status: 'won' }]) expect(asMission(bad)).toBeUndefined()
+})
+
+test('failure reasons and process errors are redacted before they are kept', () => {
+  const key = `sk-${'a'.repeat(30)}`
+  const running = mission({ status: 'running', approvedAt: AT })
+  expect(onTurnEnd(running, { ok: false, text: `401: bad key ${key}` }, false).reason).not.toContain(key)
+  const r = processRecord('exited', AT, { code: 1, error: `auth failed for ${key}\n${'x'.repeat(900)}` })
+  expect(r).toMatchObject({ at: AT, kind: 'process', event: 'exited', code: 1 })
+  expect((r as { error: string }).error).not.toContain(key)
+  expect((r as { error: string }).error.length).toBeLessThanOrEqual(501)
+  expect(processRecord('plan-mode-refused', AT, { error: '' })).toEqual({ at: AT, kind: 'process', event: 'plan-mode-refused' })
 })
 
 test('drafts only read', () => {

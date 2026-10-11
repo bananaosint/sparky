@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -14,8 +14,8 @@ import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
 import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
-import { createStore, excludeSpark } from './lib/mission-store.js';
-import { createMissionRunner } from './lib/mission-runner.js';
+import { openMissions } from './lib/mission-open.js';
+import { missionRequest } from './lib/mission-ipc.js';
 import { cookPrompt, quickAnswer } from './lib/cook.js';
 import { DEFAULT_AUTO_MODELS, CLAUDE_AUTO_MODELS, isClaude, autoAnswer, runClaude } from './lib/auto.js';
 import { sessionModelArgs, reviewDue, REVIEW_PASS } from './lib/ultracode.js';
@@ -102,33 +102,17 @@ function account() {
   }
 }
 
-// git in `dir`, the way snapshot.ts runs commands. No shell: arguments go as given.
-const gitIn = (dir) => (argv, init = {}) =>
-  new Promise((done) =>
-    execFile(argv[0], argv.slice(1), { cwd: init.cwd ?? dir, env: { ...process.env, ...init.env }, timeout: init.timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) =>
-      done({ exitCode: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr }),
-    ),
-  );
-
-// Missions live at the repo top (the folder itself outside a repo), next to the plugin's gate.jsonl.
-async function openMissions() {
-  const run = gitIn(cwd);
-  const top = await run(['git', 'rev-parse', '--show-toplevel']);
-  const inRepo = top.exitCode === 0;
-  const root = inRepo ? top.stdout.trim() : cwd;
-  if (inRepo) {
-    const exclude = await run(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'info/exclude']);
-    if (exclude.exitCode === 0) excludeSpark(exclude.stdout.trim());
-  }
-  missions = createMissionRunner({
-    store: createStore(root),
+// A folder Spark can't write to still opens for chat; missions are off there, and the window says why.
+async function openFolderMissions() {
+  const opened = await openMissions({
+    cwd,
     write: (line) => claude?.stdin.write(`${line}\n`),
     notify: (message) => send('mission', message),
-    run: inRepo ? gitIn(root) : undefined,
     now: Date.now,
     hex4: () => randomBytes(2).toString('hex'),
   });
-  missions.recover();
+  missions = opened.missions;
+  if (opened.error) send('mission', { kind: 'error', error: `missions are off in this folder: ${opened.error}` });
 }
 
 // Claude Code asks before a tool runs; the bridge server relays the question here.
@@ -274,7 +258,7 @@ ipcMain.on('ready', async () => {
   cwd = fromArgs ? resolve(fromArgs) : last && isFolder(last) ? last : await chooseFolder();
   folderMode = cwd && (await decideTrust(cwd));
   if (!folderMode) return app.quit();
-  await openMissions();
+  await openFolderMissions();
   startClaude();
 });
 
@@ -296,31 +280,24 @@ ipcMain.on('marathon', (_e, request) => {
 
 ipcMain.handle('missions', () => missions?.list() ?? []);
 ipcMain.handle('mission-view', (_e, id) => missions?.view(id));
-ipcMain.handle('mission', async (_e, request = {}) => {
-  if (!missions) return { error: 'no folder is open' };
-  if (request.action === 'start') {
-    if (['gemini', 'auto'].includes(settings().model)) return { error: 'a mission needs Claude Code: pick a Claude model or UltraCode first' };
-    if (marathon.running()) return { error: 'a marathon is running: /marathon stop ends it first' };
-    if (!claude) startClaude({ resume: sessionId, keepBusy: true });
-    fromUser = false;
-    turnEdited = false;
-    return missions.start(String(request.objective ?? ''), { sessionId });
-  }
-  if (request.action === 'approve') {
-    fromUser = false;
-    return missions.approve(request.id, request.criteria);
-  }
-  if (request.action === 'cancel') {
-    const out = missions.cancel(request.id);
-    if (out.stop) startClaude({ resume: sessionId });
-    return out;
-  }
-  if (request.action === 'resume') {
-    fromUser = false;
-    return missions.resume(request.id, (resume) => startClaude({ resume, keepBusy: true }));
-  }
-  return { error: 'unknown mission action' };
-});
+ipcMain.handle('mission', (_e, request = {}) =>
+  missionRequest(request, {
+    missions,
+    model: settings().model,
+    marathonRunning: marathon.running(),
+    sessionId,
+    ensureClaude: () => {
+      if (!claude) startClaude({ resume: sessionId, keepBusy: true });
+    },
+    stopTurn: () => startClaude({ resume: sessionId }),
+    restart: (resume) => startClaude({ resume, keepBusy: true }),
+    // Mission messages aren't the person's chat: UltraCode doesn't review them.
+    notUser: () => {
+      fromUser = false;
+      turnEdited = false;
+    },
+  }),
+);
 
 // Stopping ends the running turn; the conversation carries on in a fresh process.
 ipcMain.on('stop', () => {
@@ -345,7 +322,7 @@ ipcMain.on('open-folder', async () => {
   folderMode = mode;
   sessionId = undefined;
   alwaysAllow = new Set();
-  await openMissions();
+  await openFolderMissions();
   startClaude();
 });
 
