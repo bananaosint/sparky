@@ -97,10 +97,11 @@ export async function numstat(run: Run, from: string, to: string) {
     })
 }
 
-// Makes the working tree match `target`. Snapshots the current state first and
-// returns that snapshot, so a restore can itself be undone.
-export async function restoreSnapshot(run: Run, target: Snapshot): Promise<Snapshot> {
-  const undo = await takeSnapshot(run, `before restoring turn ${target.n}`)
+// Makes the working tree match `target`: a turn snapshot or any other checkpoint (a mission pin).
+// Snapshots the current state first and returns that snapshot, so a restore can itself be undone.
+export async function restoreSnapshot(run: Run, target: { sha: string; n?: number; label: string }): Promise<Snapshot> {
+  const what = target.n === undefined ? `: ${target.label}` : ` turn ${target.n}`
+  const undo = await takeSnapshot(run, `before restoring${what}`)
   const top = (await git(run, ['rev-parse', '--show-toplevel'])).trim()
   const env = await sparkIndex(run)
   const made = (await git(run, ['diff', '--name-only', '-z', '--diff-filter=A', target.sha, undo.sha])).split('\0').filter(Boolean)
@@ -109,7 +110,7 @@ export async function restoreSnapshot(run: Run, target: Snapshot): Promise<Snaps
   if (made.length) {
     const rm = 'for (const p of process.argv.slice(1)) require("fs").rmSync(p, { force: true })'
     const r = await run(['node', '-e', rm, ...made], { cwd: top })
-    if (r.exitCode !== 0) throw new Error(`could not remove files made since turn ${target.n}: ${r.stderr.trim()}`)
+    if (r.exitCode !== 0) throw new Error(`could not remove files made since${what}: ${r.stderr.trim()}`)
   }
   return undo
 }

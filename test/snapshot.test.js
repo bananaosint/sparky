@@ -73,6 +73,17 @@ test('restoring brings content back, removes files made since, keeps ignored fil
   assert.equal(read('later.txt'), 'made by a shell command\n');
 });
 
+test('any checkpoint restores, a mission pin too, and the undo snapshot says which it was', async () => {
+  const { run, write, read } = repo();
+  const pinned = await pinSnapshot(run, 'refs/spark/missions/m-20261010-210000-beef/start', 'mission start');
+  write('a.txt', 'changed\n');
+  const undo = await restoreSnapshot(run, { sha: pinned, label: 'Mission "Rate-limit login" started' });
+  assert.equal(read('a.txt'), 'one\n');
+  assert.equal(undo.label, 'before restoring: Mission "Rate-limit login" started');
+  const turn = await takeSnapshot(run, 'before: x');
+  assert.equal((await restoreSnapshot(run, turn)).label, 'before restoring turn ' + turn.n);
+});
+
 test('a repo without commits can still be snapshotted', async () => {
   const { run, git } = repo({ commit: false });
   const snap = await takeSnapshot(run, 'first');
