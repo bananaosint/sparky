@@ -479,17 +479,27 @@ async function ignoreSparkDir($: EngineInterface) {
 
 const GATE_LOG = '.spark/gate.jsonl'
 
+// The mod appends by reading a file and writing it back, and Claude Code runs tool calls in
+// parallel: every write to .spark/ goes through this one queue so none is lost.
+let sparkWrites: Promise<unknown> = Promise.resolve()
+function queued<T>(work: () => Promise<T>): Promise<T> {
+  const next = sparkWrites.then(work, work)
+  sparkWrites = next.catch(() => {})
+  return next
+}
+
 // F4 and F10 outcomes, one line each in .spark/gate.jsonl at the repo top, for mission reports.
 // `tree` is what the check ran on, so a report can tell whether the final code is what passed.
-async function recordGate($: EngineInterface, check: GateCheck, ok: boolean, more: { exit?: number; tree?: string } = {}) {
-  if (!inRepo) return
-  const path = `${await repoTop($)}/${GATE_LOG}`
-  const tree = more.tree ?? (await treeNow(runner($)).catch(() => undefined))
-  const line = JSON.stringify({ at: await $.clock.now(), check, ok, ...(more.exit === undefined ? {} : { exit: more.exit }), ...(tree ? { tree } : {}) })
-  const before = await $.fs.read(path).catch(() => '')
-  await $.fs.write(path, `${before}${line}\n`)
-  await ignoreSparkDir($)
-}
+const recordGate = ($: EngineInterface, check: GateCheck, ok: boolean, more: { exit?: number; tree?: string } = {}) =>
+  queued(async () => {
+    if (!inRepo) return
+    const path = `${await repoTop($)}/${GATE_LOG}`
+    const tree = more.tree ?? (await treeNow(runner($)).catch(() => undefined))
+    const line = JSON.stringify({ at: await $.clock.now(), check, ok, ...(more.exit === undefined ? {} : { exit: more.exit }), ...(tree ? { tree } : {}) })
+    const before = await $.fs.read(path).catch(() => '')
+    await $.fs.write(path, `${before}${line}\n`)
+    await ignoreSparkDir($)
+  })
 
 // Terminal missions keep the app's files: .spark/missions/<id>/{mission.json,events.jsonl,report.json}.
 const missionFile = (root: string, id: string, name: string) => `${root}/.spark/missions/${id}/${name}`
@@ -515,13 +525,16 @@ async function missionRecords($: EngineInterface, at: { id: string; root: string
   })
 }
 
+async function appendEvents($: EngineInterface, root: string, id: string, records: MissionRecord[]) {
+  if (!records.length) return
+  const path = missionFile(root, id, 'events.jsonl')
+  const before = await $.fs.read(path).catch(() => '')
+  await $.fs.write(path, before + records.map((r) => `${JSON.stringify(r)}\n`).join(''))
+}
+
 async function saveMission($: EngineInterface, root: string, m: Mission, records: MissionRecord[] = []) {
   await $.fs.write(missionFile(root, m.id, 'mission.json'), `${JSON.stringify(m, null, 2)}\n`)
-  if (records.length) {
-    const path = missionFile(root, m.id, 'events.jsonl')
-    const before = await $.fs.read(path).catch(() => '')
-    await $.fs.write(path, before + records.map((r) => `${JSON.stringify(r)}\n`).join(''))
-  }
+  await appendEvents($, root, m.id, records)
   await $.state.set(MISSION, { id: m.id, root, status: m.status })
   $.ui.invalidate('ui.render')
 }
@@ -554,18 +567,21 @@ async function missionAction($: EngineInterface, at: { id: string; root: string 
   return '✦ approved: Enter sends the mission to Claude'
 }
 
-// A prompt sent while a mission runs or waits is yours; one that answers a question resumes it.
+// A prompt sent while a mission runs, waits or is paused is yours; one sent to a waiting or
+// paused mission sets it running again.
 async function missionPrompt($: EngineInterface, text: string) {
   const at = await read($, MISSION)
-  if (!at || !text || (at.status !== 'running' && at.status !== 'waiting')) return
+  if (!at || !text || (at.status !== 'running' && at.status !== 'waiting' && at.status !== 'paused')) return
   const m = await loadMission($, at)
   const now = await $.clock.now()
   const you = youRecord(text, now)
-  if (m.status !== 'waiting') return saveMission($, at.root, m, [you])
-  const moved = move(m, 'running', 'you answered', now)
+  if (m.status === 'running') return appendEvents($, at.root, m.id, [you])
+  const moved = move(m, 'running', m.status === 'waiting' ? 'you answered' : 'you wrote to Claude', now)
   await saveMission($, at.root, moved.mission, [you, moved.record])
 }
 
+// Tool calls only add records: rewriting mission.json from here could undo a status a turn end
+// wrote in the meantime.
 async function missionTool(
   $: EngineInterface,
   at: { id: string; root: string },
@@ -574,20 +590,25 @@ async function missionTool(
 ) {
   const now = await $.clock.now()
   const id = e.tool_use_id ?? String(now)
-  await saveMission($, at.root, await loadMission($, at), [
+  await appendEvents($, at.root, at.id, [
     ...recordsFor({ kind: 'tool', id, name: e.tool, input: e as unknown as Record<string, unknown> }, now),
     ...recordsFor({ kind: 'tool-result', id, isError: Boolean(result.isError || result.deny), output: String(result.text ?? result.deny ?? '') }, now),
   ])
 }
 
-async function missionTurn($: EngineInterface, answer: string) {
+async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: boolean; durationMs?: number }) {
   const at = await read($, MISSION)
   if (!at || (at.status !== 'draft' && at.status !== 'running')) return
   const m = await loadMission($, at)
   const now = await $.clock.now()
+  // Esc stopped the turn: nothing finished, so the mission waits for the next prompt.
+  if (e.isAborted) {
+    const moved = move(m, m.status === 'draft' ? 'interrupted' : 'paused', m.status === 'draft' ? 'you stopped the draft' : 'you stopped the turn', now)
+    return saveMission($, at.root, moved.mission, [moved.record])
+  }
   const log = await $.fs.read(`${at.root}/${GATE_LOG}`).catch(() => '')
-  const done = turnEnded(m, await missionRecords($, at), { ok: true, text: answer }, parseGateLines(log.slice(m.gateOffset)), log.length, now)
-  await saveMission($, at.root, done.mission, [...recordsFor({ kind: 'result', ok: true, text: answer }, now), ...done.records])
+  const done = turnEnded(m, await missionRecords($, at), { ok: true, text: e.answer }, parseGateLines(log.slice(m.gateOffset)), log.length, now)
+  await saveMission($, at.root, done.mission, [...recordsFor({ kind: 'result', ok: true, text: e.answer, durationMs: e.durationMs }, now), ...done.records])
   if (done.mission.status === 'review') {
     $.ui.toast(`✦ ${criteriaCount(done.mission.criteria.length)} drafted: /mission shows them, /mission approve starts`)
     await openPane($, MISSION_PANE, 'mission')
@@ -869,7 +890,7 @@ export const register: Register = (on, options) => {
     // A continuation (empty text, as after the test gate's block) is the same piece of work:
     // its snapshot stays, so what the turn changed is still measured from the prompt.
     if (inRepo && !(e.text === '' && (await read($, TURN)))) await beginTurn($, e.text)
-    void missionPrompt($, e.text).catch(() => {})
+    void queued(() => missionPrompt($, e.text)).catch(() => {})
     return next(e)
   })
 
@@ -877,7 +898,8 @@ export const register: Register = (on, options) => {
     const input = e as { file_path?: unknown; notebook_path?: unknown; command?: unknown }
     const file = input.file_path ?? input.notebook_path
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && inSparkDir(file, await repoTop($))) return { deny: SPARK_DIR_REASON }
-    const missionAt = e.agentId ? null : await read($, MISSION)
+    // A draft only reads, subagents included: the terminal has no plan mode behind this.
+    const missionAt = await read($, MISSION)
     if (missionAt?.status === 'draft' && DRAFT_DENIED.has(e.tool)) return { deny: DRAFT_DENIAL }
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && (await read($, HALT)) && !editAllowedWhileHalted(file, await repoTop($)))
       return { deny: HALT_REASON }
@@ -898,8 +920,8 @@ export const register: Register = (on, options) => {
     }
     const plan = e.tool === 'ExitPlanMode' && !e.agentId && !result.deny && !result.isError ? (result.result as { plan?: unknown })?.plan : undefined
     if (typeof plan === 'string' && plan.trim()) await saveDesignDoc($, plan)
-    if (missionAt && (missionAt.status === 'draft' || missionAt.status === 'running'))
-      await missionTool($, missionAt, e, result as { isError?: boolean; deny?: string; text?: unknown }).catch(() => {})
+    if (missionAt && !e.agentId && (missionAt.status === 'draft' || missionAt.status === 'running'))
+      await queued(() => missionTool($, missionAt, e, result as { isError?: boolean; deny?: string; text?: unknown })).catch(() => {})
     return out
   })
 
@@ -950,13 +972,14 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId && reviewers.has(e.agentId)) await recordVerdict($, e.answer).catch(() => {})
-    if (!e.agentId)
+    if (!e.agentId) {
+      // The mission's turn end goes first, not behind the goal review's Gemini call.
+      void queued(() => missionTurn($, e)).catch(() => {})
       void endTurn($)
         .catch(() => {})
         .then(() => reviewGoal($, e, config))
         .catch(() => {})
-        .then(() => missionTurn($, e.answer))
-        .catch(() => {})
+    }
     return done
   })
 
@@ -969,13 +992,15 @@ export const register: Register = (on, options) => {
         await openPane($, MISSION_PANE, 'mission')
         return { text: '✦ mission pane open' }
       }
-      if (args === 'approve' || args === 'cancel') return { text: at ? await missionAction($, at, args) : '✦ no mission' }
+      if (args === 'approve' || args === 'cancel') return { text: at ? await queued(() => missionAction($, at, args)) : '✦ no mission' }
       if (at && !FINAL.has(at.status)) return { text: `✦ a mission is ${at.status}: /mission cancel ends it first` }
       const root = await repoTop($)
-      const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
-      const { mission, record } = newMission(args, await $.clock.now(), hex4(), gateOffset)
-      await saveMission($, root, mission, [record])
-      if (inRepo) await ignoreSparkDir($)
+      await queued(async () => {
+        const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
+        const { mission, record } = newMission(args, await $.clock.now(), hex4(), gateOffset)
+        await saveMission($, root, mission, [record])
+        if (inRepo) await ignoreSparkDir($)
+      })
       fillLater($, `\\${draftText(args)}`)
       return { text: '✦ mission created: Enter sends the draft request (Claude only reads). Then /mission approve.' }
     } catch (err) {

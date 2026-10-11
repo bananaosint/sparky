@@ -93,3 +93,46 @@ test('/mission refuses a second mission while one is live, and cancel ends it', 
   expect(t.saved().status).toBe('cancelled')
   expect((await mission($, 'something else')).text).toContain('Enter sends the draft request')
 })
+
+async function runningMission($: Engine, t: ReturnType<typeof terminal>) {
+  await $.session.start({ cwd: 'C:\app', surface: 'terminal', isInteractive: true })
+  await mission($, 'rate-limit the login route')
+  await t.settle()
+  await turnComplete($, DRAFT)
+  await t.settle()
+  await mission($, 'approve')
+  await t.settle()
+}
+
+test('an aborted turn pauses the mission instead of finishing it, and the next prompt resumes it', async ($, on) => {
+  const t = terminal(on)
+  await runningMission($, t)
+  await ($ as any).turn.complete({ answer: '', durationMs: 900, isAborted: true, turnId: 't2', reason: 'aborted' })
+  await t.settle()
+  expect(t.saved()).toMatchObject({ status: 'paused', reason: 'you stopped the turn' })
+  expect(t.files('report.json')).toEqual([])
+  await $.turn.start({ text: 'carry on, per account', turnId: 't3' } as any)
+  await t.settle()
+  expect(t.saved().status).toBe('running')
+})
+
+test('parallel tool calls both reach the record', async ($, on) => {
+  const t = terminal(on)
+  await runningMission($, t)
+  await Promise.all([
+    $.tool.call({ tool: 'Edit', file_path: 'C:/app/src/a.js', old_string: 'a', new_string: 'b', tool_use_id: 'p1' } as any),
+    $.tool.call({ tool: 'Edit', file_path: 'C:/app/src/b.js', old_string: 'a', new_string: 'b', tool_use_id: 'p2' } as any),
+  ])
+  await t.settle()
+  const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
+  expect(events.filter((e: any) => e.kind === 'tool').map((e: any) => e.id).sort()).toEqual(['p1', 'p2'])
+})
+
+test('a subagent during the draft is refused edits too', async ($, on) => {
+  const t = terminal(on)
+  await $.session.start({ cwd: 'C:\app', surface: 'terminal', isInteractive: true })
+  await mission($, 'rate-limit the login route')
+  await t.settle()
+  const denied: any = await $.tool.call({ tool: 'Write', file_path: 'C:/app/src/x.js', content: 'x', agentId: 'sub-1' } as any)
+  expect(denied.deny).toContain('being drafted')
+})
