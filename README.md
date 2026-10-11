@@ -91,6 +91,16 @@ What it doesn't cover: time spent waiting on a permission card counts, so turn o
 - **One at a time:** a mission and a marathon don't run together, and missions need Claude Code (not Gemini or Auto).
 - **In the terminal:** `/mission <objective>` fills the prompt box with the draft request; `/mission approve` fills it with the run request; `/mission cancel` ends it; `/mission` opens the pane. The terminal can't see costs or your permission answers, has no criteria editor, no Resume and no Check again. It runs Spark's checks when a mission ends, as the app does, and drives a planned mission's tasks the same way: after each task's check, the next task's message (or the retry) is in the prompt box for you to send. In the terminal the drafted plan is approved as it is.
 
+## Changes
+
+**Changes** in the header lists Spark's checkpoints, newest first: the 20 turn snapshots taken before each prompt, and every snapshot a mission pinned (its start, each task's end, its end). Each says what it was. One whose exact code passed the test gate is marked *tests passed*; failed, *tests failed*.
+
+Select a checkpoint to see every file that differs between it and the working tree now. A changed file opens to its diff.
+
+**Restore to this checkpoint** first shows which files change: put back, deleted (made since) or brought back (deleted since). Spark saves the current state as a checkpoint before it restores, so **Undo this restore** brings it back. Files git ignores are never touched.
+
+Restore waits while Claude is on a turn, a mission runs or Spark is checking one, or a marathon runs. Outside a git repository there are no checkpoints. In the terminal, `/spark-diff` and `/spark-restore` do the same for turn snapshots.
+
 ## Council
 
 `/council how should we cache the provider catalogs?` runs Light; `/council full …` runs Full.

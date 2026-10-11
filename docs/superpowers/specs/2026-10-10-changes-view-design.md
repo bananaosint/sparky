@@ -37,7 +37,7 @@ Selecting one shows **Since this checkpoint**: every file that differs between i
 
 After a restore the view says which checkpoint holds the state from just before, with a button to restore it.
 
-Restore is refused while any of these is going on, because each would race it: Claude is working on a turn, a mission is live or its checks run, a marathon runs, or a council's brief is being written. The refusal names which one.
+Restore is refused while any of these is going on, because each would race it: Claude is working on a turn, a mission is live or its checks run, or a marathon runs. The refusal names which one. A council's brief only reads files, so it doesn't block a restore.
 
 ## Where it lives
 
