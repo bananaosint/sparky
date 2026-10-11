@@ -125,7 +125,7 @@ The card updates as each model answers:
 - Claude calls count toward your plan and are shown at API rates. Gemini doesn't report cost.
 - Records go to `.spark/councils/<id>.json`.
 
-**In the terminal:** `/council [full] <question>` writes the brief and opens a pane with the panel. `/council run` (or the pane's button) is your consent to send the brief to the providers it names. Then `/council cancel` and `/council mission`.
+**In the terminal:** `/council [full] <question>` writes the brief and opens a pane with the panel. `/council run` (or the pane's button) is your consent to send the brief to the providers it names. Then `/council cancel` and `/council mission`. In the terminal, cancel stops Claude's proposers and judges at once. OpenRouter, Gemini and Ollama requests, and Claude's brief and synthesis, can't be stopped from there. They run to their end (10 minutes at most), and if one answers after the cancel, its cost is still added to the council's record.
 
 **What was tested for real:** a Light council with Claude and Gemini, end to end. A Full council and OpenRouter calls were not run end to end (no OpenRouter key was available); the OpenRouter client follows its documented API and is tested against a fake one.
 

@@ -635,15 +635,23 @@ async function councilKeys($: EngineInterface) {
   return { openrouter: await read($, OPENROUTER_KEY), gemini: await read($, KEY) }
 }
 
-// One model call for the orchestrator. Claude runs as a one-shot `claude -p`: in the project with
-// read-only tools for the brief and the synthesis, in the temp folder with no tools for the rest.
+// One model call for the orchestrator. Claude proposers and judges need no tools, so they go
+// through the session's own client, which Stop cuts. The brief and the synthesis read the project:
+// a one-shot `claude -p` with read-only tools, which the mod can't stop (it ends within 10 minutes).
+// Hosted requests can't be stopped either; runCouncil counts what they cost if they answer late.
 function terminalCall($: EngineInterface, keys: { openrouter?: string; gemini?: string }, cwd: string, dataCollection: 'deny' | 'allow'): Call {
-  return async (seat, role, request) => {
+  return async (seat, role, request, signal) => {
     const { id, provider } = seat.candidate
+    if (provider === 'claude' && role !== 'brief' && role !== 'synth') {
+      const r = await $.model.complete({ model: id, system: request.system, prompt: request.user, maxTokens: Math.min(request.maxTokens, 64_000) }, { signal })
+      if (r.isAnswered) {
+        const u = r.usage
+        return { text: r.text, inTokens: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens, outTokens: u.output_tokens }
+      }
+      throw callError(r.reason === 'api-error' ? (r.status ?? undefined) : undefined, r.reason === 'api-error' ? `API error ${r.status ?? 'with no response'}` : r.reason)
+    }
     if (provider === 'claude') {
-      const readOnly = role === 'brief' || role === 'synth'
-      const scratch = (await $.env.get('TEMP')) ?? cwd
-      const r = await $.process.run(['claude', ...claudeArgv(id, request.system, { readOnly })], { cwd: readOnly ? cwd : scratch, stdin: request.user, timeoutMs: 600_000 })
+      const r = await $.process.run(['claude', ...claudeArgv(id, request.system, { readOnly: true })], { cwd, stdin: request.user, timeoutMs: 600_000 })
       let json: unknown
       try {
         json = JSON.parse(r.stdout)
@@ -1178,7 +1186,7 @@ export const register: Register = (on, options) => {
     if (args === 'cancel') {
       if (councilNow?.record.run?.status !== 'running') return { text: '✦ no council is running' }
       councilNow.controller?.abort()
-      return { text: '✦ council cancelled; finished answers are kept' }
+      return { text: "✦ council cancelled; finished answers are kept. Hosted requests and Claude's synthesis can't be stopped from here: if one still answers, its cost is added to the record" }
     }
     if (councilNow?.record.run?.status === 'running') return { text: '✦ a council is running: /council cancel stops it' }
     const full = /^full\b/i.test(args)

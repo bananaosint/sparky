@@ -58,6 +58,11 @@ function rig(mode: 'light' | 'full', script: (seen: Seen, n: number) => unknown 
       await new Promise((r) => setTimeout(r, 1))
       const own = script(s, n)
       if (own === 'hang') await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))))
+      // A call that can't be stopped (a hosted request in the terminal) answers after its time.
+      if (own === 'late') {
+        await realSleep(60)
+        return { text: proposal(seat), usd: 0.07 }
+      }
       if (own instanceof Error) throw own
       if (typeof own === 'string') return { text: own }
       if (role === 'proposer') return { text: proposal(seat), usd: 0 }
@@ -98,6 +103,17 @@ test('a call past its time limit is timed out, not answered', async () => {
   const record = await run(r, 'light', { timeoutMs: 20 })
   expect(record.seats['proposer:deepseek/m']).toMatchObject({ state: 'timed out' })
   expect(record.proposals.map((p) => p.seatId)).not.toContain('deepseek/m')
+})
+
+test('a call that answers after its time limit or a cancel still has its cost recorded', async () => {
+  const r = rig('light', (s) => (s.seat === 'deepseek/m' && s.role === 'proposer' ? 'late' : undefined))
+  const record = await run(r, 'light', { timeoutMs: 20 })
+  expect(record.seats['proposer:deepseek/m']).toMatchObject({ state: 'timed out' })
+  await realSleep(100)
+  expect(record.seats['proposer:deepseek/m']).toMatchObject({ state: 'timed out', usd: 0.07 })
+  expect(record.seats['proposer:deepseek/m']!.error).toBe('no answer within 0 s; it answered later, and its cost is counted')
+  const last = r.told.at(-1) as unknown as { record: typeof record }
+  expect(last.record.seats['proposer:deepseek/m']!.usd).toBe(0.07)
 })
 
 test('a 429 is retried once and then answers', async () => {

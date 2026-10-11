@@ -115,8 +115,9 @@ export async function runCouncil({
         })
         .catch(() => {})
       let retry = false
+      const pending = call(seat, role, request, own.signal)
       try {
-        const reply = await Promise.race([call(seat, role, request, own.signal), aborted(own.signal)])
+        const reply = await Promise.race([pending, aborted(own.signal)])
         const checked = check(reply.text)
         const spent = { ms: now() - started, ...(reply.usd === undefined ? {} : { usd: (log.usd ?? 0) + reply.usd }), ...(reply.inTokens === undefined ? {} : { inTokens: reply.inTokens }), ...(reply.outTokens === undefined ? {} : { outTokens: reply.outTokens }) }
         Object.assign(log, spent)
@@ -132,6 +133,18 @@ export async function runCouncil({
       } catch (err) {
         const e = err as CallError
         log.error = timedOut ? `no answer within ${Math.round(timeoutMs / 1000)} s` : signal.aborted ? 'cancelled' : e.message
+        // Some calls can't be stopped (a hosted request in the terminal): one that answers anyway
+        // was still paid for.
+        if (timedOut || signal.aborted)
+          pending.then(
+            (late) => {
+              if (late.usd === undefined) return
+              log.usd = (log.usd ?? 0) + late.usd
+              log.error = `${log.error}; it answered later, and its cost is counted`
+              emit()
+            },
+            () => {},
+          )
         if (timedOut) log.state = 'timed out'
         else if (signal.aborted) log.state = 'skipped'
         else if (e.unavailable) log.state = 'unavailable'

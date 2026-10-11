@@ -50,6 +50,10 @@ function terminal(on: any) {
     if (a.includes('--git-path')) return out(`C:/app/.git/${a.at(-1)}\n`)
     return out('')
   })
+  on('model.complete', (_$: unknown, e: any) => {
+    seen.push(`complete:${e.model}`)
+    return { value: { isAnswered: true, text: answerFor(e.system ?? '', e.prompt), usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
   on('http.fetch', (_$: unknown, e: any) => {
     const respond = (status: number, body: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(body) } })
     if (e.url.includes('11434')) return respond(500, {})
@@ -87,6 +91,10 @@ test('/council: the brief and panel first; /council run asks the models and save
   const done = t.councilFile()
   expect(done.run.status).toBe('done')
   expect(done.run.aggregate.judged).toBe(2)
+  // Proposers and judges go through the session's client, which Stop can cut; the brief and the
+  // synthesis read the project, so they run as `claude -p` with read-only tools.
+  expect(t.seen.filter((s) => s.startsWith('complete:')).sort()).toEqual(['complete:opus', 'complete:sonnet'])
+  expect(t.seen.filter((s) => s.startsWith('claude:'))).toEqual(['claude:sonnet', 'claude:sonnet'])
   expect((await council($, 'mission')).text).toContain('/mission approve')
   await t.settle()
   const missionFile = JSON.parse([...t.disk.entries()].find(([k]) => k.endsWith('mission.json'))![1])
