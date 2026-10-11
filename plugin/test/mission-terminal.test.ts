@@ -250,6 +250,31 @@ test('a planned terminal mission drives its tasks: after a passing check the nex
   expect(report.tasks.map((x: any) => x.state)).toEqual(['done', 'done'])
 })
 
+test("a turn that ends while a task's check runs is not taken for the task's end", async ($, on) => {
+  let release = () => {}
+  let released = false
+  const t = terminal(on, {
+    cmd: () => (released ? { exitCode: 0, stdout: 'ok' } : new Promise<Ran>((r) => (release = () => ((released = true), r({ exitCode: 0, stdout: 'ok' }))))),
+  })
+  await $.session.start({ cwd: 'C:\\app', surface: 'terminal', isInteractive: true })
+  await mission($, 'rate-limit the login route')
+  await t.settle()
+  await turnComplete($, PLANNED)
+  await t.settle()
+  await mission($, 'approve')
+  await t.settle()
+  await turnComplete($, 'Added the limiter.')
+  await t.settle()
+  await turnComplete($, 'And a word about it.')
+  await t.settle()
+  release()
+  await t.settle()
+  await t.settle()
+  expect(t.ran).toEqual(['npm test -- limiter'])
+  const events = t.files('events.jsonl')[0]![1].trim().split('\n').map((l: string) => JSON.parse(l))
+  expect(events.filter((e: any) => e.kind === 'task').map((e: any) => `${e.id} ${e.event}`)).toEqual(['t1 started', 't1 done', 't2 started'])
+})
+
 test('a cancelled terminal mission is not checked', async ($, on) => {
   const t = terminal(on, { top: ['package.json'] })
   t.disk.set(key('C:/app/package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))

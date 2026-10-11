@@ -765,8 +765,18 @@ async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: 
     await openPane($, MISSION_PANE, 'mission')
   }
   if (FINAL.has(done.mission.status)) void missionReport($, at.root, done.mission).catch(() => {})
-  else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length) void terminalTaskTurn($, at.root, done.mission).catch(() => {})
+  else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length) {
+    // A turn that ends while the last one's check runs (you wrote meanwhile) isn't a task's end.
+    if (taskTurns.has(m.id)) return $.ui.toast("✦ Spark is still checking the last task: this turn isn't counted as a task")
+    taskTurns.add(m.id)
+    void terminalTaskTurn($, at.root, done.mission)
+      .catch((err) => $.ui.toast(`✦ Spark couldn't finish the task's turn: ${message(err)}`))
+      .finally(() => taskTurns.delete(m.id))
+  }
 }
+
+// Missions whose task turn Spark is still recording and checking.
+const taskTurns = new Set<string>()
 
 // ---------- /council in the terminal: the shared steps, with $.http and $.process as the I/O ----------
 
