@@ -82,6 +82,69 @@ test('rows and sections survive hostile files from disk', () => {
   expect(sections.find((s) => s.heading === 'Time and cost')?.lines[0]?.text).toBe('1:00 since approval · Claude worked 0:50, drafting included')
 })
 
+const UNTRUSTED = 'the folder is untrusted; only your own configured commands run'
+const verified: MissionRecord[] = [
+  ...records,
+  { at: 8000, kind: 'verify', again: false },
+  { at: 8100, kind: 'check', name: 'tests', command: 'npm test', status: 'pass', exit: 0, ms: 12_000, tree: T, tail: 'ok 3', log: '1.log' },
+  { at: 8200, kind: 'check', name: 'lint', status: 'not-run', reason: UNTRUSTED },
+  { at: 8300, kind: 'check', name: 'criterion 1', criterion: 0, command: 'npm test', status: 'pass', exit: 0, ms: 9000, log: '3.log' },
+]
+
+test("Spark's own checks give the verdict, the criteria lines and the proof; Claude's account plays no part", () => {
+  const r = buildReport(done(), verified, { inRepo: true, endTree: T, now: 99_000 })
+  expect(r.status).toBe('Finished · Needs review')
+  expect(r.criteria.map((c) => c.check)).toEqual(['passed (npm test)', 'needs you'])
+  expect(r.proof).toEqual({
+    verdict: 'needs review',
+    at: 8000,
+    again: false,
+    logDir: `.spark/missions/${base.id}/checks`,
+    checks: [
+      { name: 'tests', status: 'pass', line: 'npm test · passed · 0:12', log: '1.log' },
+      { name: 'lint', status: 'not-run', line: `not run: ${UNTRUSTED}` },
+      { name: 'criterion 1', status: 'pass', line: 'npm test · passed · 0:09', log: '3.log' },
+    ],
+  })
+  const onlyCommands = done({ criteria: [{ text: 'sixth login gets 429', how: 'npm test', by: 'claude' }] })
+  const clean = verified.filter((x) => !(x.kind === 'check' && x.name === 'lint'))
+  expect(buildReport(onlyCommands, clean, { inRepo: true, endTree: T, now: 99_000 }).status).toBe('Finished · Verified')
+})
+
+test('the last pass counts: Check again replaces the earlier results and says what it ran on', () => {
+  const again: MissionRecord[] = [
+    ...verified,
+    { at: 9000, kind: 'verify', again: true },
+    { at: 9100, kind: 'check', name: 'tests', command: 'npm test', status: 'fail', exit: 1, ms: 4000, tail: 'not ok 2 lockout', log: '1.log' },
+    { at: 9200, kind: 'check', name: 'criterion 1', criterion: 0, command: 'npm test', status: 'timed-out', exit: 1, ms: 300_000, log: '2.log' },
+  ]
+  const r = buildReport(done({ status: 'blocked', reason: 'Claude says it is blocked' }), again, { inRepo: true, endTree: T, now: 99_000 })
+  expect(r.status).toBe('Blocked · Checks failed · Claude says it is blocked')
+  expect(r.proof?.again).toBe(true)
+  expect(r.proof?.checks.map((c) => c.line)).toEqual(['npm test · failed (exit 1) · 0:04', 'npm test · timed out · 5:00'])
+  expect(r.criteria.map((c) => c.check)).toEqual(['timed out', 'needs you'])
+  const sections = reportSections(r)
+  expect(sections.map((s) => s.heading).slice(0, 3)).toEqual(['Status', 'Proof of completion', 'Criteria'])
+  const proof = sections[1]!.lines
+  expect(proof[0]?.text).toMatch(/^Checked again at \d\d:\d\d:\d\d, on the working tree as it was then$/)
+  expect(proof.slice(1)).toEqual([
+    { text: `✗ tests · npm test · failed (exit 1) · 0:04 · log .spark/missions/${base.id}/checks/1.log`, tone: 'fail' },
+    { text: `✗ criterion 1 · npm test · timed out · 5:00 · log .spark/missions/${base.id}/checks/2.log`, tone: 'fail' },
+  ])
+  expect(sections[0]!.lines[0]?.tone).toBe('fail')
+})
+
+test('a check that could not start says why; check rows show in the timeline', () => {
+  const broke: MissionRecord[] = [{ at: 1, kind: 'verify', again: false }, { at: 2, kind: 'check', name: 'criterion 1', criterion: 0, command: 'npm test', status: 'fail', reason: 'spawn cmd ENOENT', ms: 5 }]
+  expect(buildReport(done(), broke, { inRepo: false, now: 9 }).criteria[0]?.check).toBe('failed: spawn cmd ENOENT')
+  expect(describe(broke[0]!)).toMatchObject({ tone: 'info', text: 'Spark ran its checks' })
+  expect(describe({ at: 1, kind: 'verify', again: true })?.text).toBe('Spark checked again, on the working tree as it is now')
+  expect(describe(verified.at(-2)!)).toMatchObject({ tone: 'warn', text: `lint not run: ${UNTRUSTED}` })
+  expect(describe({ at: 1, kind: 'check', name: 'build', command: 'npm run build', status: 'fail', exit: 2, tail: 'error TS2304' })).toMatchObject({ tone: 'fail', text: 'build failed (exit 2)', detail: 'error TS2304' })
+  const junk = { at: 1, kind: 'check', name: { x: 1 }, status: 'great' } as unknown as MissionRecord
+  expect(() => describe(junk)).not.toThrow()
+})
+
 test('clock reads m:ss, or h:mm:ss past an hour', () => {
   expect(clock(50_000)).toBe('0:50')
   expect(clock(3_725_000)).toBe('1:02:05')

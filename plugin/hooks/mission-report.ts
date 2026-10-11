@@ -4,6 +4,8 @@ import { numstat, pinSnapshot, treeOf } from './snapshot.ts'
 import type { Run } from './snapshot.ts'
 import { EDIT_TOOLS, SHELL_TOOLS } from './mission.ts'
 import type { Decision, GateRecord, Mission, MissionRecord } from './mission.ts'
+import { isCommandHow, verdict } from './verify.ts'
+import type { CheckResult, CheckStatus, Verdict } from './verify.ts'
 
 export type FileStat = { path: string; added: number; removed: number }
 export type Facts = { inRepo: boolean; now: number; files?: FileStat[]; endTree?: string }
@@ -20,6 +22,8 @@ export type Report = {
   time: { wallMs?: number; workedMs: number }
   cost: { usd?: number; tokens?: number }
   claude: string
+  // Spark's own checks, from the last verification pass.
+  proof?: { verdict: Verdict; at: number; again: boolean; logDir: string; checks: { name: string; status: CheckStatus; line: string; log?: string }[] }
 }
 export type Row = { at: number; glyph: string; tone: 'ok' | 'fail' | 'info' | 'warn'; text: string; detail?: string }
 export type Section = { heading: string; lines: { text: string; tone?: Row['tone'] }[]; markdown?: boolean }
@@ -57,8 +61,26 @@ export function totals(records: readonly MissionRecord[]) {
 const gateLine = (r: GateRecord) =>
   r.check === 'halt' ? 'halted: two failed test or build runs in a row' : `${r.check} ${r.ok ? 'passed' : `failed${r.exit === undefined ? '' : ` (exit ${r.exit})`}`}`
 
+const VERDICT_WORD: Record<Verdict, string> = { verified: 'Verified', 'needs review': 'Needs review', 'checks failed': 'Checks failed', 'not verified': 'Not verified' }
+
+const outcome = (c: Partial<CheckResult>) => {
+  if (c.status === 'pass') return 'passed'
+  if (c.status === 'fail') return c.exit === undefined ? `failed: ${String(c.reason ?? '')}` : `failed (exit ${String(c.exit)})`
+  if (c.status === 'timed-out') return 'timed out'
+  return `not run: ${String(c.reason ?? '')}`
+}
+const proofLine = (c: CheckResult) => (c.command ? `${c.command} · ${outcome(c)} · ${clock(Number(c.ms) || 0)}` : outcome(c))
+
+function lastPass(records: readonly MissionRecord[]) {
+  const i = records.map((r) => r.kind).lastIndexOf('verify')
+  return i < 0 ? undefined : { start: records[i] as Of<'verify'>, checks: records.slice(i + 1).filter(is('check')) }
+}
+
 export function buildReport(m: Mission, records: readonly MissionRecord[], facts: Facts): Report {
   const state = testState(records, facts)
+  const pass = lastPass(records)
+  const v = pass && verdict(pass.checks, m.criteria)
+  const byCriterion = new Map((pass?.checks ?? []).filter((c) => typeof c.criterion === 'number').map((c) => [c.criterion, c] as const))
   const tools = records.filter(is('tool'))
   const results = new Map(records.filter(is('tool-result')).map((r) => [r.id, r.ok] as const))
   const perms = records.filter(is('permission'))
@@ -67,9 +89,23 @@ export function buildReport(m: Mission, records: readonly MissionRecord[], facts
   const sums = totals(records)
   const word = `${m.status.charAt(0).toUpperCase()}${m.status.slice(1)}`
   return {
-    status: m.status === 'finished' ? `Finished · ${TEST_LINES[state]}` : `${word} · ${m.reason}`,
+    status: v
+      ? [word, VERDICT_WORD[v], ...(m.status === 'finished' ? [] : [m.reason])].join(' · ')
+      : m.status === 'finished'
+        ? `Finished · ${TEST_LINES[state]}`
+        : `${word} · ${m.reason}`,
     tests: { state, line: TEST_LINES[state] },
-    criteria: m.criteria.map((c) => ({ ...c, check: c.how === 'manual' ? 'needs you' : 'not checked by Spark' })),
+    criteria: m.criteria.map((c, i) => {
+      const ran = byCriterion.get(i)
+      const check = ran
+        ? ran.status === 'pass'
+          ? `passed (${ran.command})`
+          : outcome(ran)
+        : c.how === 'manual' || (pass && !isCommandHow(c.how))
+          ? 'needs you'
+          : 'not checked by Spark'
+      return { ...c, check }
+    }),
     files: facts.files ?? edited,
     ...(facts.files
       ? {}
@@ -85,6 +121,17 @@ export function buildReport(m: Mission, records: readonly MissionRecord[], facts
     time: { ...(m.approvedAt === undefined ? {} : { wallMs: (m.endedAt ?? facts.now) - m.approvedAt }), workedMs: sums.workedMs },
     cost: { ...(sums.usd === undefined ? {} : { usd: sums.usd }), ...(sums.tokens === undefined ? {} : { tokens: sums.tokens }) },
     claude: records.filter(is('turn')).at(-1)?.text ?? '',
+    ...(pass && v
+      ? {
+          proof: {
+            verdict: v,
+            at: pass.start.at,
+            again: pass.start.again === true,
+            logDir: `.spark/missions/${m.id}/checks`,
+            checks: pass.checks.map((c) => ({ name: c.name, status: c.status, line: proofLine(c), ...(c.log ? { log: c.log } : {}) })),
+          },
+        }
+      : {}),
   }
 }
 
@@ -150,6 +197,16 @@ export function describe(r: MissionRecord): Row | undefined {
         text: `${PROCESS[s(r.event)] ?? s(r.event)}${typeof r.code === 'number' ? ` (code ${r.code})` : ''}`,
         ...(r.error ? { detail: s(r.error) } : {}),
       }
+    case 'verify':
+      return { at: r.at, glyph: '◆', tone: 'info', text: r.again === true ? 'Spark checked again, on the working tree as it is now' : 'Spark ran its checks' }
+    case 'check':
+      return {
+        at: r.at,
+        glyph: r.status === 'pass' ? '✓' : r.status === 'not-run' ? '·' : '✗',
+        tone: r.status === 'pass' ? 'ok' : r.status === 'not-run' ? 'warn' : 'fail',
+        text: `${s(r.name)} ${outcome(r)}`,
+        ...(r.status !== 'pass' && r.tail ? { detail: s(r.tail) } : {}),
+      }
   }
   return undefined
 }
@@ -169,8 +226,33 @@ export function reportSections(r: unknown): Section[] {
   const usd = field(field(r, 'cost'), 'usd')
   const tokens = field(field(r, 'cost'), 'tokens')
   const note = field(r, 'filesNote')
+  const proof = field(r, 'proof')
+  const said = field(proof, 'verdict')
+  const statusTone = proof
+    ? said === 'verified' ? 'ok' : said === 'checks failed' ? 'fail' : 'warn'
+    : tests === 'passed' ? 'ok' : tests === 'failing' ? 'fail' : 'warn'
+  const at = timeOfDay(Number(field(proof, 'at')))
+  const logDir = text(field(proof, 'logDir'))
   return [
-    { heading: 'Status', lines: [{ text: text(field(r, 'status')), tone: tests === 'passed' ? 'ok' : tests === 'failing' ? 'fail' : 'warn' }] },
+    { heading: 'Status', lines: [{ text: text(field(r, 'status')), tone: statusTone }] },
+    ...(proof
+      ? [
+          {
+            heading: 'Proof of completion',
+            lines: [
+              { text: field(proof, 'again') === true ? `Checked again at ${at}, on the working tree as it was then` : `Spark ran these checks itself at ${at}` },
+              ...list(field(proof, 'checks')).map((c) => {
+                const status = field(c, 'status')
+                const log = field(c, 'log')
+                return {
+                  text: `${status === 'pass' ? '✓' : status === 'not-run' ? '·' : '✗'} ${text(field(c, 'name'))} · ${text(field(c, 'line'))}${log ? ` · log ${logDir}/${text(log)}` : ''}`,
+                  tone: status === 'pass' ? ('ok' as const) : status === 'not-run' ? ('warn' as const) : ('fail' as const),
+                }
+              }),
+            ],
+          },
+        ]
+      : []),
     {
       heading: 'Criteria',
       lines: list(field(r, 'criteria')).map((c) => ({

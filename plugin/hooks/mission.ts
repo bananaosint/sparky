@@ -3,6 +3,7 @@
 // loads this file through Node's type stripping, so runtime imports name their .ts file.
 import { redact } from './redact.ts'
 import { endsInQuestion } from './testgate.ts'
+import type { CheckResult } from './verify.ts'
 
 export type Status = 'draft' | 'review' | 'running' | 'waiting' | 'paused' | 'interrupted' | 'finished' | 'blocked' | 'cancelled'
 export type Criterion = { text: string; how: string; by: 'claude' | 'you' }
@@ -39,6 +40,10 @@ export type MissionRecord =
   | GateRecord
   | { at: number; kind: 'model'; model: string }
   | { at: number; kind: 'process'; event: 'started' | 'resumed' | 'exited' | 'plan-mode-refused'; code?: number; error?: string }
+  // A verification pass: the check records after it are its results. `again`: Check again, on
+  // the working tree as it was then rather than as the mission ended.
+  | { at: number; kind: 'verify'; again: boolean }
+  | ({ at: number; kind: 'check' } & CheckResult)
 export type TurnEnd = { to: Status; reason: string; drafted?: { title: string; criteria: Criterion[] } }
 
 const STATUSES: readonly Status[] = ['draft', 'review', 'running', 'waiting', 'paused', 'interrupted', 'finished', 'blocked', 'cancelled']
@@ -322,12 +327,15 @@ export function resumeFailed(records: readonly MissionRecord[]) {
   return a?.kind === 'process' && a.event === 'resumed' && b?.kind === 'process' && b.event === 'exited'
 }
 
-const KINDS: ReadonlySet<string> = new Set(['status', 'you', 'tool', 'tool-result', 'permission', 'turn', 'gate', 'model', 'process'])
+const KINDS: ReadonlySet<string> = new Set(['status', 'you', 'tool', 'tool-result', 'permission', 'turn', 'gate', 'model', 'process', 'verify', 'check'])
+// A check record's status feeds the verdict, so an unknown one is not let through.
+const CHECK_STATUSES: ReadonlySet<string> = new Set(['pass', 'fail', 'timed-out', 'not-run'])
 
 // Files under .spark/ can come with the repo: only well-formed ones are used, and values that
 // would reach git or claude are dropped unless they have the expected form.
 export function asRecord(j: unknown): MissionRecord | undefined {
   const r = (j ?? {}) as Record<string, unknown>
+  if (r.kind === 'check' && !(typeof r.name === 'string' && CHECK_STATUSES.has(String(r.status)))) return undefined
   return typeof r.at === 'number' && KINDS.has(String(r.kind)) ? (r as MissionRecord) : undefined
 }
 

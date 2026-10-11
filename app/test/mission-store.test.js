@@ -67,6 +67,16 @@ test('a shipped mission.json is cleaned: a hostile sha or session id is dropped'
   assert.equal(back.sessionId, undefined);
 });
 
+test('a check record with an unknown status or no name is dropped, so it can never count toward a verdict', () => {
+  const root = folder();
+  const store = createStore(root);
+  const { mission } = made();
+  store.save(mission);
+  const good = { at: 2, kind: 'check', name: 'tests', command: 'npm test', status: 'pass', exit: 0 };
+  for (const r of [{ at: 1, kind: 'verify', again: false }, good, { at: 3, kind: 'check', name: 'lint', status: 'great' }, { at: 4, kind: 'check', status: 'pass' }]) store.append(mission.id, r);
+  assert.deepEqual(store.read(mission.id).records, [{ at: 1, kind: 'verify', again: false }, good]);
+});
+
 test('gateSince reads only whole lines after the offset, and starts over if the file shrank', () => {
   const root = folder();
   const store = createStore(root);
