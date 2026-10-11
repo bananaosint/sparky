@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import { HALT_REASON, isBuild, editAllowedWhileHalted } from '../hooks/halt'
+import { HALT_REASON, isBuild, editAllowedWhileHalted, inSparkDir } from '../hooks/halt'
 import { MISP } from '../hooks/misp'
 import { fakeRepo, startTurn, stop } from './fake'
 
@@ -104,4 +104,12 @@ test('while halted every prompt carries <spark-halt>', async ($, on) => {
   await $.prompt.submit({ text: 'why did it fail', wait: false, origin: composer })
   expect(seen.at(-1)?.join('\n')).toContain('<spark-halt>')
   expect(MISP).toContain('- Halt: after two consecutive build or test failures Spark blocks edits and shows <spark-halt>.')
+})
+
+test('.spark/ paths are recognised however they are written', () => {
+  expect(inSparkDir('C:\\app\\.spark\\gate.jsonl', 'C:/app')).toBe(true)
+  expect(inSparkDir('.spark/missions/m/mission.json', 'C:/app')).toBe(true)
+  expect(inSparkDir('C:/app/src/../.spark/x', 'C:/app')).toBe(true)
+  expect(inSparkDir('C:/app/src/spark.js', 'C:/app')).toBe(false)
+  expect(inSparkDir('C:/app/.sparkle/x', 'C:/app')).toBe(false)
 })

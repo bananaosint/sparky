@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../src/args.js';
 import { prepareSession, configuredTheme } from '../src/session.js';
-import { loadKey, saveKey, clearKey, defaultKeyPath } from '../src/key.js';
+import { loadKey, saveKey, clearKey, defaultKeyPath, openrouterKeyPath } from '../src/key.js';
 import { findModels } from '../src/doctor.js';
 import { tryCommand, shellLine } from '../src/failure.js';
 import { install, uninstall, writeFragment, installPaths } from '../src/install.js';
@@ -91,7 +91,7 @@ async function runSkinned(pty, args, env, theme, intro) {
 }
 
 function run({ plain, gemini, tests, direct, animate, passthrough }) {
-  const { args, env, theme, state } = prepareSession({ pluginDir, plain, gemini, tests, passthrough });
+  const { args, env, theme, state } = prepareSession({ pluginDir, plain, gemini, tests, passthrough, openrouterKey: loadKey(openrouterKeyPath()) });
   const intro = plain ? undefined : frames({ theme, subline: `${basename(process.cwd())} · ${state}` });
   const showIntro = async () => {
     if (!intro) return;

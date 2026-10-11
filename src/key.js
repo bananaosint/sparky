@@ -9,6 +9,9 @@ export function defaultKeyPath() {
   return join(process.env.APPDATA ?? '', 'spark', 'gemini.key');
 }
 
+// The app's ⚙ settings save it; the terminal reads it for /council.
+export const openrouterKeyPath = () => join(process.env.APPDATA ?? '', 'spark', 'openrouter.key');
+
 const PROTECT = `
 Add-Type -AssemblyName System.Security
 $bytes = [Text.Encoding]::UTF8.GetBytes($env:SPARK_KEY_IN)

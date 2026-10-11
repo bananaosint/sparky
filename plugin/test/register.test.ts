@@ -130,6 +130,8 @@ async function cookWith($: Engine, on: any, registry: Registry, refuse: Record<s
   return { box, searched, toasts, rewrites, routes }
 }
 
+const byGemini = (model: string) => `(Gemini (${model}) rewrote this prompt from what I typed. If part of it seems to contradict what I meant, ask me.)\n\n`
+
 test('cooking loads installed skills, searches skills.sh for missing ones and fills the box', async ($, on) => {
   const { box, searched, toasts } = await cookWith($, on, {
     status: 200,
@@ -141,7 +143,8 @@ test('cooking loads installed skills, searches skills.sh for missing ones and fi
   expect(toasts).toEqual([])
   expect(searched).toEqual(['https://skills.sh/api/search?q=playwright%20e2e&limit=10'])
   expect(box).toBe(
-    'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd\n\n' +
+    byGemini('gemini-3.6-flash') +
+      'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd\n\n' +
       'Install these skills first with `npx skills add <id> -g -y`:\n- microsoft/playwright@playwright (52K installs)',
   )
 })
@@ -149,7 +152,7 @@ test('cooking loads installed skills, searches skills.sh for missing ones and fi
 test('a failing skills.sh search keeps the installed picks', async ($, on) => {
   const { box, toasts } = await cookWith($, on, { status: 503 })
   expect(toasts).toEqual([])
-  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+  expect(box).toBe(byGemini('gemini-3.6-flash') + 'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a model that fails three times hands the prompt to the next model in its chain', async ($, on) => {
@@ -161,20 +164,20 @@ test('a model that fails three times hands the prompt to the next model in its c
   expect(rewrites).toEqual([...Array(3).fill('gemini-3.6-flash'), ...Array(3).fill('gemini-3.5-flash'), 'gemini-3-flash-preview'])
   expect(routes).toEqual([...Array(3).fill('gemini-3.5-flash-lite'), 'gemini-3.1-flash-lite'])
   expect(toasts).toEqual([])
-  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+  expect(box).toBe(byGemini('gemini-3-flash-preview') + 'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a slow model gets three tries of 10 seconds, then the next model answers', async ($, on) => {
   const { box, toasts, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.6-flash': ['hang', 'hang', 'hang'] }, 31_000)
   expect(rewrites).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'])
   expect(toasts).toEqual([])
-  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+  expect(box).toBe(byGemini('gemini-3.5-flash') + 'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a model that fails once is asked again before the chain moves on', async ($, on) => {
   const { box, rewrites } = await cookWith($, on, { status: 503 }, { 'gemini-3.6-flash': [503] })
   expect(rewrites).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash'])
-  expect(box).toBe('Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
+  expect(box).toBe(byGemini('gemini-3.6-flash') + 'Add Playwright e2e tests for checkout, test first.\n\nSkills: tdd')
 })
 
 test('a refused key stops the chain instead of trying every model', async ($, on) => {
@@ -246,5 +249,5 @@ test('promptifying shows Gemini\'s version and sends it with the image when chos
   const { asked, reached } = await imagePrompt($, on, ['Promptify', "Send Gemini's version"])
   expect(asked.length).toBe(2)
   expect(asked[1]).toContain('Restyle the header to match the attached screenshot.')
-  expect(reached).toEqual([{ text: 'Restyle the header to match the attached screenshot.', attachments: [{ type: 'image', mediaType: 'image/png' }] }])
+  expect(reached).toEqual([{ text: byGemini('gemini-3.6-flash') + 'Restyle the header to match the attached screenshot.', attachments: [{ type: 'image', mediaType: 'image/png' }] }])
 })

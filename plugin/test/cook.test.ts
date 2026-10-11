@@ -90,6 +90,13 @@ test('the role opens the cooked text as an "Act as" line', () => {
   expect(text).toBe('Act as a CSV sommelier with 300 years of spreadsheet tasting.\n\nAdd a CSV export.\n\nSkills: tdd')
 })
 
+test('a prompt Gemini rewrote says so, after the role', () => {
+  const text = composeCooked({ prompt: 'Add a CSV export.', unclear: [], role: 'a CSV sommelier', by: 'gemini-3.6-flash' }, ['tdd'])
+  expect(text).toBe(
+    'Act as a CSV sommelier.\n\n(Gemini (gemini-3.6-flash) rewrote this prompt from what I typed. If part of it seems to contradict what I meant, ask me.)\n\nAdd a CSV export.\n\nSkills: tdd',
+  )
+})
+
 test('composeCooked lists registry skills to install after the loaded ones', () => {
   const text = composeCooked({ prompt: 'Add e2e tests.', unclear: [] }, ['tdd'], [{ id: 'microsoft/playwright@playwright', installs: 52000 }])
   expect(text).toBe(

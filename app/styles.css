@@ -93,10 +93,18 @@ body {
   filter: drop-shadow(0 0 8px color-mix(in srgb, var(--c3) 50%, transparent));
 }
 
+.brand {
+  min-width: 0;
+}
+
 .status {
   margin-top: 4px;
   font-size: 12px;
   color: #929db3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status .sep {
@@ -612,17 +620,6 @@ pre.output.error {
   color: #b7c0d4;
 }
 
-.pill {
-  background: transparent;
-  color: #929db3;
-}
-
-.pill.on {
-  color: #0b0d14;
-  background: linear-gradient(90deg, var(--c1), var(--c4));
-  border-color: transparent;
-}
-
 .send,
 .stop {
   width: 38px;
@@ -675,7 +672,8 @@ dialog h2 {
   font-weight: 600;
 }
 
-.row input {
+.row input,
+.row select {
   padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--c3) 45%, transparent);
@@ -778,6 +776,31 @@ dialog h2 {
   -webkit-app-region: no-drag;
 }
 
+#hero3d {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 168px;
+  height: 168px;
+  cursor: grab;
+  touch-action: none;
+  animation: glow-big 4.5s ease-in-out infinite;
+}
+
+#hero3d:active {
+  cursor: grabbing;
+}
+
+/* Once the 3D Sparky draws, he stands over the flat one, which stays laid out but unseen so its
+   poke and overload sparks still fly around him. */
+#hero-wrap.three #hero {
+  visibility: hidden;
+}
+
+#hero-wrap.three #hero3d {
+  display: block;
+}
+
 .particle {
   position: absolute;
   left: calc(var(--x) * var(--px));
@@ -848,6 +871,14 @@ dialog h2 {
   }
 }
 
+/* A teardrop: one sharp corner, turned to point up. */
+.particle.sweat {
+  border-radius: 50% 0 50% 50%;
+  rotate: -45deg;
+  background: #9fdcff;
+  box-shadow: 0 0 calc(var(--px) * 1.2) #5ab8ff;
+}
+
 .particle.ring {
   width: calc(var(--px) * 6);
   height: calc(var(--px) * 6);
@@ -885,6 +916,42 @@ dialog h2 {
 }
 .tone-gemini {
   --tone: #8ab4ff;
+}
+.model-set {
+  margin: 12px 0 4px;
+  padding: 8px 12px 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 30%, transparent);
+  border-radius: 12px;
+}
+
+.model-set legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: #929db3;
+}
+
+.model-checks {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 16px;
+}
+
+.auto-answers summary {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #929db3;
+  cursor: pointer;
+}
+
+.auto-answers .failed {
+  color: #ff8a9c;
+}
+
+.tone-auto {
+  --tone: #5eead4;
+}
+.tone-ultracode {
+  --tone: #ff7a59;
 }
 
 .engine {
@@ -996,7 +1063,7 @@ dialog h2 {
   position-try-fallbacks: flip-block;
   inset: auto;
   margin: 0 0 12px;
-  width: min(640px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
   padding: 18px 18px 14px;
   overflow: visible;
   color: #e8edf7;
@@ -1094,7 +1161,7 @@ dialog h2 {
 
 .models {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -1323,4 +1390,1039 @@ dialog h2 {
 
 .core-note.lock {
   color: #ffce54;
+}
+
+/* ---------- missions ---------- */
+
+#bar .actions button {
+  white-space: nowrap;
+}
+
+#bar .actions button.on {
+  background: color-mix(in srgb, var(--c2) 32%, transparent);
+  border-color: var(--c1);
+}
+
+#missions,
+#changes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px max(24px, calc((100% - 1120px) / 2));
+}
+
+/* An id rule beats the browser's [hidden] rule, so hidden has to be restated. */
+#missions[hidden],
+#changes[hidden] {
+  display: none;
+}
+
+.mission-detail::-webkit-scrollbar,
+#mission-items::-webkit-scrollbar,
+#checkpoint-items::-webkit-scrollbar {
+  width: 10px;
+}
+
+.mission-detail::-webkit-scrollbar-thumb,
+#mission-items::-webkit-scrollbar-thumb,
+#checkpoint-items::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--c3) 35%, transparent);
+  border-radius: 10px;
+}
+
+.mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.mission-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #929db3;
+}
+
+#mission-objective {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 42%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+#mission-items,
+#checkpoint-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#mission-items .item button,
+#checkpoint-items .item button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: center;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 400;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  border-color: transparent;
+}
+
+#mission-items .item.selected button,
+#checkpoint-items .item.selected button {
+  border-color: var(--c1);
+  background: color-mix(in srgb, var(--c2) 16%, var(--panel));
+}
+
+#mission-items .title,
+#checkpoint-items .title {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#mission-items .meta,
+#checkpoint-items .meta {
+  grid-row: 2;
+  font-size: 12px;
+  color: #929db3;
+}
+
+#mission-items .pill,
+#checkpoint-items .pill {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.mission-list .empty,
+.mission-detail .empty {
+  color: #929db3;
+  line-height: 1.55;
+  max-width: 60ch;
+}
+
+.pill {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #c9d2e6;
+  background: color-mix(in srgb, var(--c3) 28%, transparent);
+}
+
+.pill.finished {
+  color: #7ef0b8;
+  background: color-mix(in srgb, #7ef0b8 16%, transparent);
+}
+
+.pill.blocked,
+.pill.interrupted {
+  color: #ff8a9c;
+  background: color-mix(in srgb, #ff8a9c 16%, transparent);
+}
+
+.pill.review,
+.pill.waiting,
+.pill.paused {
+  color: #ffce54;
+  background: color-mix(in srgb, #ffce54 14%, transparent);
+}
+
+.pill.cancelled {
+  color: #929db3;
+  background: color-mix(in srgb, #929db3 16%, transparent);
+}
+
+.mission-detail {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding-right: 8px;
+}
+
+.mission-head h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.mission-head .objective {
+  margin: 0 0 12px;
+  max-width: 72ch;
+  color: #b7c0d4;
+}
+
+.mission-head .facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 12.5px;
+  color: #929db3;
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-head .state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #e8edf7;
+}
+
+.mission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.mission-actions .yes {
+  background: linear-gradient(135deg, var(--c2), var(--c3));
+  border-color: transparent;
+}
+
+.mission-actions .no,
+.mission-actions .ghost,
+.mission-card .ghost {
+  background: transparent;
+}
+
+.mission-actions .error {
+  font-size: 12.5px;
+  color: #ff8a9c;
+}
+
+.mission-detail h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #929db3;
+}
+
+.mission-detail h4 {
+  margin: 16px 0 4px;
+  font-size: 13.5px;
+}
+
+.mission-detail ol,
+.mission-detail ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.mission-detail li {
+  margin: 4px 0;
+}
+
+.mission-detail .none {
+  margin: 0;
+  color: #929db3;
+}
+
+.report {
+  padding: 16px 20px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c3) 32%, transparent);
+}
+
+.report .part:first-of-type h4 {
+  margin-top: 0;
+}
+
+.report ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.report li.ok {
+  color: #7ef0b8;
+}
+
+.report li.fail {
+  color: #ff8a9c;
+}
+
+.report li.warn {
+  color: #ffce54;
+}
+
+.report .claude {
+  color: #b7c0d4;
+  max-width: 72ch;
+}
+
+.timeline ol {
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.timeline .tl-row {
+  display: grid;
+  grid-template-columns: 72px 24px minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--c3) 16%, transparent);
+}
+
+.timeline time {
+  color: #7d879c;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline .text {
+  overflow-wrap: anywhere;
+}
+
+.timeline .tl-row details {
+  grid-column: 3;
+}
+
+.timeline .tl-row summary {
+  cursor: pointer;
+  color: #929db3;
+}
+
+.timeline .tl-row pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.tl-row.ok .glyph {
+  color: #7ef0b8;
+}
+
+.tl-row.fail .glyph,
+.tl-row.fail .text {
+  color: #ff8a9c;
+}
+
+.tl-row.warn .glyph {
+  color: #ffce54;
+}
+
+.mission-card {
+  margin: 12px 0;
+  padding: 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c1) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: enter 200ms ease-out;
+}
+
+.mission-kicker {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #929db3;
+}
+
+.mission-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.mission-card .mission-note,
+.mission-card .mission-warn {
+  margin: 0;
+  color: #b7c0d4;
+}
+
+.mission-card .mission-warn {
+  color: #ffce54;
+}
+
+.mission-card .criteria {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mission-card .criterion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 32%) 32px;
+  gap: 8px;
+  align-items: center;
+}
+
+.mission-card input {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c3) 38%, transparent);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+.mission-card input:disabled {
+  opacity: 0.7;
+}
+
+.mission-card .remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 16px;
+  background: transparent;
+}
+
+.mission-card .ghost {
+  align-self: flex-start;
+}
+
+.mission-card .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.mission-card .yes {
+  background: linear-gradient(135deg, var(--c2), var(--c3));
+  border-color: transparent;
+}
+
+.mission-card .no {
+  background: transparent;
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--c1);
+  font: inherit;
+  text-decoration: underline;
+  box-shadow: none;
+}
+
+@media (max-width: 860px) {
+  #missions,
+  #changes {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  #mission-items,
+  #checkpoint-items {
+    max-height: 30vh;
+  }
+
+  .mission-card .criteria {
+    gap: 16px;
+  }
+
+  .mission-card .criterion {
+    grid-template-columns: minmax(0, 1fr) 32px;
+    gap: 4px 8px;
+  }
+
+  .mission-card .criterion .how {
+    grid-column: 1;
+  }
+}
+
+/* ---------- council ---------- */
+
+.council-card {
+  margin: 12px 0;
+  padding: 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c4) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: enter 200ms ease-out;
+}
+
+.council-card h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #929db3;
+}
+
+.council-card h5 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+
+.council-card p {
+  margin: 0;
+}
+
+.council-brief summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.brief-body {
+  margin-top: 8px;
+  max-width: 72ch;
+  color: #b7c0d4;
+}
+
+.brief-body pre,
+.council-card .proposal pre {
+  white-space: pre-wrap;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.council-panel,
+.council-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.council-panel th,
+.council-matrix th {
+  text-align: left;
+  font-weight: 600;
+  color: #929db3;
+  padding: 4px 8px 6px 0;
+  white-space: nowrap;
+}
+
+.council-panel td,
+.council-matrix td {
+  padding: 6px 8px 6px 0;
+  vertical-align: top;
+  border-top: 1px solid color-mix(in srgb, var(--c3) 18%, transparent);
+}
+
+.council-panel .why {
+  color: #b7c0d4;
+  max-width: 34ch;
+}
+
+.model-name,
+.model-id {
+  display: block;
+}
+
+.model-id {
+  font-size: 11.5px;
+  color: #7d879c;
+}
+
+.seat-state {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c3) 25%, transparent);
+}
+
+.seat-state.running {
+  background: color-mix(in srgb, var(--c1) 25%, transparent);
+}
+
+.seat-state.done {
+  color: #7ef0b8;
+  background: color-mix(in srgb, #7ef0b8 14%, transparent);
+}
+
+.seat-state.failed,
+.seat-state.timed-out {
+  color: #ff8a9c;
+  background: color-mix(in srgb, #ff8a9c 14%, transparent);
+}
+
+.seat-state.unavailable {
+  color: #ffce54;
+  background: color-mix(in srgb, #ffce54 12%, transparent);
+}
+
+.seat-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #929db3;
+}
+
+.council-facts {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.council-facts .warn,
+.council-card li.warn {
+  color: #ffce54;
+}
+
+.council-card .fail {
+  color: #ff8a9c;
+}
+
+.council-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #ffce54 40%, transparent);
+}
+
+.council-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 24px;
+  font-size: 13px;
+}
+
+.council-card .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.council-card .yes {
+  align-self: flex-start;
+  background: linear-gradient(135deg, var(--c2), var(--c3));
+  border-color: transparent;
+}
+
+.council-card .no {
+  align-self: flex-start;
+  background: transparent;
+}
+
+.council-matrix .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.council-matrix tr.lead td:first-child {
+  color: #7ef0b8;
+  font-weight: 700;
+}
+
+.council-case {
+  margin-bottom: 8px !important;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.gallery details,
+.combos li {
+  margin: 4px 0;
+}
+
+.gallery summary {
+  cursor: pointer;
+}
+
+.combos {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #b7c0d4;
+}
+
+.synthesis {
+  max-width: 76ch;
+}
+
+.council-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.synthesis h1,
+.synthesis h2,
+.synthesis h3,
+.council-card .proposal h1,
+.council-card .proposal h2,
+.council-card .proposal h3 {
+  margin: 16px 0 4px;
+  font-size: 15px;
+}
+
+.synthesis pre,
+.council-card .proposal pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+/* ---------- mission plans: the review card's tasks, the graph and the task panel ---------- */
+
+.plan-editor h4,
+.plan h3 {
+  margin: 8px 0;
+}
+
+.plan-editor .spec,
+.plan .spec {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  white-space: pre-wrap;
+  color: #b7c0d4;
+}
+
+.plan-editor .tasks {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-editor .task-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 24%, transparent);
+}
+
+.plan-editor .task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-editor .task-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.plan-editor textarea {
+  min-width: 0;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c3) 38%, transparent);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.task-id {
+  font: 600 12px 'Cascadia Code', Consolas, monospace;
+  color: #929db3;
+}
+
+.task-after {
+  font-size: 12px;
+  color: #929db3;
+}
+
+.plan-graph {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.plan-graph .layer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.plan-graph .layer-arrow {
+  text-align: center;
+  color: #7d879c;
+  line-height: 1;
+}
+
+.task-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  min-width: 0;
+  width: min(260px, 100%);
+  padding: 10px 12px;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 32%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.task-node:hover,
+.task-node[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--c1) 70%, transparent);
+}
+
+.task-node .task-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.task-node .task-state,
+.task-node .task-after {
+  grid-column: 2;
+  font-size: 12px;
+  color: #929db3;
+}
+
+.task-node.done .task-state {
+  color: #7ef0b8;
+}
+
+.task-node.failed .task-state {
+  color: #ff8a9c;
+}
+
+.task-node.running .task-state {
+  color: #ffce54;
+}
+
+.task-node.running {
+  border-color: color-mix(in srgb, #ffce54 55%, transparent);
+}
+
+.task-node.failed {
+  border-color: color-mix(in srgb, #ff8a9c 55%, transparent);
+}
+
+.task-node.not-reached {
+  opacity: 0.7;
+}
+
+.plan .note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: #929db3;
+}
+
+.task-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c3) 24%, transparent);
+}
+
+.task-panel h4 {
+  margin: 0 0 8px;
+}
+
+.task-panel .task-do {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+.task-panel ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0 0 8px;
+}
+
+.task-panel li.ok {
+  color: #7ef0b8;
+}
+
+.task-panel li.fail {
+  color: #ff8a9c;
+}
+
+.task-panel li.warn {
+  color: #ffce54;
+}
+
+.task-panel .task-rows {
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.task-panel .task-rows .tl-row {
+  display: grid;
+  grid-template-columns: 72px 24px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 4px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-node {
+    transition: none;
+  }
+}
+
+.task-panel .task-rows .tl-row details {
+  grid-column: 3;
+}
+
+.task-panel .task-rows pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font: 12px 'Cascadia Code', Consolas, monospace;
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* ---------- the Changes view ---------- */
+
+#changes .mission-label {
+  margin: 0;
+}
+
+#checkpoint-items .item button:hover,
+#mission-items .item button:hover {
+  border-color: color-mix(in srgb, var(--c1) 50%, transparent);
+}
+
+.mission-head .facts .ok {
+  color: #7ef0b8;
+}
+
+.mission-head .facts .fail {
+  color: #ff8a9c;
+}
+
+.change-files {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+}
+
+.change-files li {
+  overflow-wrap: anywhere;
+}
+
+.change-files .new {
+  color: #7ef0b8;
+}
+
+.change-files .deleted {
+  color: #ff8a9c;
+}
+
+.change-files summary {
+  cursor: pointer;
+}
+
+.patch {
+  margin: 8px 0 12px;
+  padding: 12px;
+  max-height: 420px;
+  overflow: auto;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  font: 12.5px/1.5 'Cascadia Code', Consolas, monospace;
+  /* A diff shows code as written: no ligatures turning >= into one glyph. */
+  font-variant-ligatures: none;
+  white-space: pre;
+}
+
+.patch .add {
+  color: #7ef0b8;
+}
+
+.patch .del {
+  color: #ff8a9c;
+}
+
+.patch .hunk {
+  color: #929db3;
+}
+
+.restore-confirm,
+.restore-done {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, #ff8a9c 45%, transparent);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  max-width: 72ch;
+}
+
+.restore-done {
+  border-color: color-mix(in srgb, #7ef0b8 45%, transparent);
+}
+
+.restore-confirm h5 {
+  margin: 12px 0 4px;
+}
+
+.restore-confirm ul {
+  margin: 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.restore-confirm .note {
+  color: #b7c0d4;
+}
+
+.restore-confirm .buttons {
+  display: flex;
+  gap: 8px;
 }

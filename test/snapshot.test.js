@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { takeSnapshot, listSnapshots, restoreSnapshot, fileDiffs } from '../plugin/hooks/snapshot.ts';
+import { takeSnapshot, listSnapshots, restoreSnapshot, fileDiffs, pinSnapshot, treeNow, treeOf, numstat } from '../plugin/hooks/snapshot.ts';
 
 function repo({ commit = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'spark-snap-'));
@@ -73,6 +73,17 @@ test('restoring brings content back, removes files made since, keeps ignored fil
   assert.equal(read('later.txt'), 'made by a shell command\n');
 });
 
+test('any checkpoint restores, a mission pin too, and the undo snapshot says which it was', async () => {
+  const { run, write, read } = repo();
+  const pinned = await pinSnapshot(run, 'refs/spark/missions/m-20261010-210000-beef/start', 'mission start');
+  write('a.txt', 'changed\n');
+  const undo = await restoreSnapshot(run, { sha: pinned, label: 'Mission "Rate-limit login" started' });
+  assert.equal(read('a.txt'), 'one\n');
+  assert.equal(undo.label, 'before restoring: Mission "Rate-limit login" started');
+  const turn = await takeSnapshot(run, 'before: x');
+  assert.equal((await restoreSnapshot(run, turn)).label, 'before restoring turn ' + turn.n);
+});
+
 test('a repo without commits can still be snapshotted', async () => {
   const { run, git } = repo({ commit: false });
   const snap = await takeSnapshot(run, 'first');
@@ -119,4 +130,31 @@ test('without a file list, file diffs cover every change since the snapshot, she
   rmSync(join(dir, 'b.txt'));
   const diffs = await fileDiffs(run, snap.sha);
   assert.deepEqual(diffs.map((d) => `${d.kind} ${d.path}`).sort(), ['deleted b.txt', 'modified a.txt', 'new generated.txt']);
+});
+
+test('a pinned snapshot lives under its own ref and is never pruned with the turn snapshots', async () => {
+  const { run, git, write } = repo();
+  write('a.txt', 'two\n');
+  const sha = await pinSnapshot(run, 'refs/spark/missions/m-20261010-180509-beef/start', 'mission start');
+  assert.equal(git('rev-parse', 'refs/spark/missions/m-20261010-180509-beef/start').trim(), sha);
+  for (let i = 0; i < 21; i++) await takeSnapshot(run, `turn ${i}`);
+  assert.equal(git('rev-parse', 'refs/spark/missions/m-20261010-180509-beef/start').trim(), sha);
+  assert.equal((await listSnapshots(run)).length, 20);
+});
+
+test('treeNow matches the tree of a snapshot of the same files, and numstat counts lines per file', async () => {
+  const { run, write } = repo();
+  const start = await pinSnapshot(run, 'refs/spark/missions/x/start', 'start');
+  write('a.txt', 'one\nmore\n');
+  write('new.txt', 'fresh\n');
+  const tree = await treeNow(run);
+  const end = await pinSnapshot(run, 'refs/spark/missions/x/end', 'end');
+  assert.equal(await treeOf(run, end), tree);
+  assert.deepEqual(
+    (await numstat(run, start, end)).sort((a, b) => a.path.localeCompare(b.path)),
+    [
+      { path: 'a.txt', added: 1, removed: 0 },
+      { path: 'new.txt', added: 1, removed: 0 },
+    ],
+  );
 });

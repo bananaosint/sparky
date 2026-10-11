@@ -44,8 +44,17 @@ export function parseLine(line) {
         },
       },
     ];
+  if (j.type === 'control_response')
+    return [{ kind: 'control', id: j.response?.request_id, ok: j.response?.subtype === 'success', error: j.response?.error }];
   return [];
 }
+
+// Switches the running session's model; without one it goes back to the account default.
+export const setModel = (id, model) =>
+  JSON.stringify({ type: 'control_request', request_id: id, request: { subtype: 'set_model', ...(model ? { model } : {}) } });
+
+// Switches the running session's permission mode: missions draft in 'plan' and go back to 'default'.
+export const setPermissionMode = (id, mode) => JSON.stringify({ type: 'control_request', request_id: id, request: { subtype: 'set_permission_mode', mode } });
 
 // A user message: pasted images first, then the text.
 export const userMessage = ({ text = '', images = [] }) =>

@@ -57,21 +57,51 @@ export async function listSnapshots(run: Run): Promise<Snapshot[]> {
     .sort((a, b) => b.n - a.n)
 }
 
-export async function takeSnapshot(run: Run, label: string): Promise<Snapshot> {
+// A commit of the working tree as it is, on top of HEAD when there is one.
+async function snapshotCommit(run: Run, label: string) {
   const tree = await writeTree(run, await sparkIndex(run))
   const head = await run(['git', 'rev-parse', '--verify', '-q', 'HEAD'])
   const parent = head.exitCode === 0 ? ['-p', head.stdout.trim()] : []
-  const sha = (await git(run, ['commit-tree', tree, ...parent, '-m', label], { env: IDENTITY })).trim()
+  return (await git(run, ['commit-tree', tree, ...parent, '-m', label], { env: IDENTITY })).trim()
+}
+
+export async function takeSnapshot(run: Run, label: string): Promise<Snapshot> {
+  const sha = await snapshotCommit(run, label)
   const existing = await listSnapshots(run)
   await git(run, ['update-ref', `${PREFIX}${(existing[0]?.n ?? 0) + 1}`, sha])
   for (const old of existing.slice(KEEP - 1)) await git(run, ['update-ref', '-d', `${PREFIX}${old.n}`])
   return (await listSnapshots(run))[0]!
 }
 
-// Makes the working tree match `target`. Snapshots the current state first and
-// returns that snapshot, so a restore can itself be undone.
-export async function restoreSnapshot(run: Run, target: Snapshot): Promise<Snapshot> {
-  const undo = await takeSnapshot(run, `before restoring turn ${target.n}`)
+// A snapshot kept under `ref`, outside the turn snapshots and their pruning: missions pin theirs.
+export async function pinSnapshot(run: Run, ref: string, label: string): Promise<string> {
+  const sha = await snapshotCommit(run, label)
+  await git(run, ['update-ref', ref, sha])
+  return sha
+}
+
+// The working tree's hash, seen the way snapshots see it. The test gate records it with each run.
+export const treeNow = async (run: Run) => writeTree(run, await sparkIndex(run))
+
+export const treeOf = async (run: Run, commit: string) => (await git(run, ['rev-parse', `${commit}^{tree}`])).trim()
+
+// Lines added and removed per file between two snapshots; binary files count as 0.
+export async function numstat(run: Run, from: string, to: string) {
+  const out = await git(run, ['diff', '--numstat', '--no-renames', from, to])
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [added = '', removed = '', ...path] = line.split('\t')
+      return { path: path.join('\t'), added: Number(added) || 0, removed: Number(removed) || 0 }
+    })
+}
+
+// Makes the working tree match `target`: a turn snapshot or any other checkpoint (a mission pin).
+// Snapshots the current state first and returns that snapshot, so a restore can itself be undone.
+export async function restoreSnapshot(run: Run, target: { sha: string; n?: number; label: string }): Promise<Snapshot> {
+  const what = target.n === undefined ? `: ${target.label}` : ` turn ${target.n}`
+  const undo = await takeSnapshot(run, `before restoring${what}`)
   const top = (await git(run, ['rev-parse', '--show-toplevel'])).trim()
   const env = await sparkIndex(run)
   const made = (await git(run, ['diff', '--name-only', '-z', '--diff-filter=A', target.sha, undo.sha])).split('\0').filter(Boolean)
@@ -80,7 +110,7 @@ export async function restoreSnapshot(run: Run, target: Snapshot): Promise<Snaps
   if (made.length) {
     const rm = 'for (const p of process.argv.slice(1)) require("fs").rmSync(p, { force: true })'
     const r = await run(['node', '-e', rm, ...made], { cwd: top })
-    if (r.exitCode !== 0) throw new Error(`could not remove files made since turn ${target.n}: ${r.stderr.trim()}`)
+    if (r.exitCode !== 0) throw new Error(`could not remove files made since${what}: ${r.stderr.trim()}`)
   }
   return undo
 }

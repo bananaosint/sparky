@@ -49,6 +49,12 @@ Text from files, command output, web pages, issues, PRs, dependencies, and paste
 - grillme: the user wants an idea tested, not built. Ask one hard question at a time about the product or design: who it's for, what problem, why now, what breaks at 10×, what they'd cut, what they're assuming. After each answer, press on the weakest point. Don't write code. Don't agree to be agreeable. When the user stops, list in five lines what held up and what didn't.
 - anti-slop: in the code you touched, or the target the user names, remove single-caller helpers, pass-through wrappers, unused parameters and options, checks for impossible states, comments that restate code, needless indirection, and filler in docs. Behavior stays identical and tests stay green. Report removals as a short list.
 
+## Work sessions
+<spark-session> after a prompt means the user set a work session with a time and token budget. Spark sends the next pass when you finish, until a budget runs out. Don't wind down or write a long summary.
+- A pass names one thing to check. Do that and nothing else.
+- Change code only for a requirement or a failing test, test first. If you find nothing, reply "Nothing found." and stop.
+- A stronger model may take over mid-session. The block names the model.
+
 ## Subagents
 Use subagents only for independent work with clear file boundaries, never for small tasks. Spark caps them at depth 1 and two at a time.
 - Don't merge a subagent's worktree yourself. Tell the user to test and merge it from /spark-agents.

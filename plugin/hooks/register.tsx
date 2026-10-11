@@ -26,17 +26,47 @@ import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
 import { failurePrompt, parseFailure, trimOutput } from './failure'
 import { budgetLine, overLimit, parseGoal, turnTokens } from './goal'
-import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, editAllowedWhileHalted, isBuild } from './halt'
+import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, SPARK_DIR_REASON, editAllowedWhileHalted, inSparkDir, isBuild } from './halt'
+import {
+  DRAFT_DENIAL,
+  DRAFT_DENIED,
+  FINAL,
+  asMission,
+  asRecord,
+  criteriaCount,
+  draftText,
+  move,
+  newMission,
+  parseGateLines,
+  recordsFor,
+  runText,
+  turnEnded,
+  youRecord,
+} from './mission'
+import type { GateCheck, Mission, MissionRecord } from './mission'
+import { buildReport, describe, gitFacts, reportSections } from './mission-report'
+import type { Row } from './mission-report'
+import { CLAUDE_CANDIDATES, briefPrompt, normalizeGemini, normalizeOllama, normalizeOpenRouter, parseBrief } from './council'
+import type { Candidate, Mode } from './council'
+import { BRIEF_SYSTEM, councilId, missionPlan, panelOf, preflightRecord, runRefusal } from './council-flow'
+import type { Preflight } from './council-flow'
+import { callError, claudeArgv, geminiRequest, ollamaRequest, openrouterRequest, parseClaude, parseGemini, parseOllama, parseOpenRouter, retryAfterMs } from './council-providers'
+import { runCouncil } from './council-run'
+import type { Call, CouncilRecord } from './council-run'
 import { pruneOutput, readDenied } from './prune'
 import { classify, mergeTargets, parseVerdict, previewArgv } from './gate'
 import type { Preview } from './gate'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
-import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot } from './snapshot'
+import { fileDiffs, listSnapshots, numstat, pinSnapshot, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
+import { afterCheck, nextTask, retryText, taskStates, taskText } from './plan'
+import type { TaskRecord } from './plan'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
+import { CHECK_RUNNER, CHECK_TIMED_OUT, changedScripts, configuredFor, planChecks } from './verify'
+import type { CheckResult, PlannedCheck } from './verify'
 
 const PHASE = { plugin: 'spark', key: 'phase' } as const
 const MODES = { plugin: 'spark', key: 'modes' } as const
@@ -209,7 +239,7 @@ async function cook($: EngineInterface, raw: string, id: number, config: Config)
     : rewritten.status === 'rejected'
       ? `rewrite failed: ${String(rewritten.reason?.message ?? rewritten.reason)}`
       : 'rewrite came back empty'
-  const text = restore(composeCooked(rewrite ?? { prompt: raw, unclear: [] }, picked, install))
+  const text = restore(composeCooked(rewrite ? { ...rewrite, by: model } : { prompt: raw, unclear: [] }, picked, install))
 
   const box = await $.prompt.read()
   if (box.text !== raw) {
@@ -238,10 +268,10 @@ async function promptify($: EngineInterface, text: string, key: string, config: 
   if (choice !== 'Promptify') return text
   try {
     const { text: safe, restore } = redact(text)
-    const { answer } = await firstAnswer($, key, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs)
+    const { answer, model } = await firstAnswer($, key, config.rewriteModels, rewriteRequest(safe, config.rewriteThinking), config.timeoutMs)
     const rewrite = parseRewrite(answer)
     if (!rewrite) throw new Error('the rewrite came back empty')
-    const cooked = restore(composeCooked(rewrite, []))
+    const cooked = restore(composeCooked({ ...rewrite, by: model }, []))
     const pick = await $.ui.ask(`Gemini's version:\n\n${cooked}`, ["Send Gemini's version", 'Send mine as typed'])
     return pick === "Send Gemini's version" ? cooked : text
   } catch (err) {
@@ -276,9 +306,15 @@ const GOAL = { plugin: 'spark', key: 'goal' } as const
 const STREAK = { plugin: 'spark', key: 'streak' } as const
 const HALT = { plugin: 'spark', key: 'halt' } as const
 const VERDICTS = { plugin: 'spark', key: 'verdicts' } as const
+const MISSION = { plugin: 'spark', key: 'mission' } as const
+const OPENROUTER_KEY = { plugin: 'spark', key: 'openrouterKey' } as const
 
 const DIFF_PANE = 'spark:diff'
 const AGENTS_PANE = 'spark:agents'
+// ui.open ids are letters, digits, _ and - only.
+const MISSION_PANE = 'spark-mission'
+const COUNCIL_PANE = 'spark-council'
+const TONE: Record<Row['tone'], string | undefined> = { ok: '#4ADE80', fail: ERROR, warn: '#FACC15', info: undefined }
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // The pane is for a glance; past this it says how many lines it left out.
 const PATCH_LINES = 400
@@ -294,6 +330,8 @@ const COMMANDS = [
   { name: 'sandbox', description: 'Spark: end each turn with keep or revert' },
   { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
   { name: 'spark-unhalt', description: 'Spark: lift the halt once the post-mortem is written' },
+  { name: 'mission', description: 'Spark: work toward criteria you approve, with a recorded report', argumentHint: '<objective> | approve | cancel' },
+  { name: 'council', description: 'Spark: several models propose, others judge blind, one synthesizes', argumentHint: '[full] <question> | run | cancel | mission' },
   {
     name: 'goal',
     description: 'Spark: work toward a goal; after each turn Gemini reviews the changes and proposes the next step',
@@ -381,6 +419,7 @@ async function countOutcome($: EngineInterface, ok: boolean) {
   const streak = await update($, STREAK, (n) => (n ?? 0) + 1)
   if (streak < HALT_AFTER || (await read($, HALT))) return false
   await $.state.set(HALT, { at: await $.clock.now() })
+  await recordGate($, 'halt', false).catch(() => {})
   $.ui.toast(HALT_REASON)
   return true
 }
@@ -450,6 +489,473 @@ async function ignoreSparkDir($: EngineInterface) {
   const now = await $.fs.read(path).catch(() => '')
   if (now.split(/\r?\n/).includes('.spark/')) return
   await $.fs.write(path, `${now}${now && !now.endsWith('\n') ? '\n' : ''}.spark/\n`)
+}
+
+const GATE_LOG = '.spark/gate.jsonl'
+
+// The mod appends by reading a file and writing it back, and Claude Code runs tool calls in
+// parallel: every write to .spark/ goes through this one queue so none is lost.
+let sparkWrites: Promise<unknown> = Promise.resolve()
+function queued<T>(work: () => Promise<T>): Promise<T> {
+  const next = sparkWrites.then(work, work)
+  sparkWrites = next.catch(() => {})
+  return next
+}
+
+// F4 and F10 outcomes, one line each in .spark/gate.jsonl at the repo top, for mission reports.
+// `tree` is what the check ran on, so a report can tell whether the final code is what passed.
+const recordGate = ($: EngineInterface, check: GateCheck, ok: boolean, more: { exit?: number; tree?: string } = {}) =>
+  queued(async () => {
+    if (!inRepo) return
+    const path = `${await repoTop($)}/${GATE_LOG}`
+    const tree = more.tree ?? (await treeNow(runner($)).catch(() => undefined))
+    const line = JSON.stringify({ at: await $.clock.now(), check, ok, ...(more.exit === undefined ? {} : { exit: more.exit }), ...(tree ? { tree } : {}) })
+    const before = await $.fs.read(path).catch(() => '')
+    await $.fs.write(path, `${before}${line}\n`)
+    await ignoreSparkDir($)
+  })
+
+// Terminal missions keep the app's files: .spark/missions/<id>/{mission.json,events.jsonl,report.json}.
+const missionFile = (root: string, id: string, name: string) => `${root}/.spark/missions/${id}/${name}`
+const hex4 = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')
+// After a command the engine clears the box; fill it once that has happened.
+const fillLater = ($: EngineInterface, text: string) => void $.clock.sleep(30).then(() => $.prompt.fill({ text })).catch(() => {})
+
+async function loadMission($: EngineInterface, at: { id: string; root: string }) {
+  const m = asMission(JSON.parse(await $.fs.read(missionFile(at.root, at.id, 'mission.json'))))
+  if (!m || m.id !== at.id) throw new Error('the mission file is unreadable')
+  return m
+}
+
+async function missionRecords($: EngineInterface, at: { id: string; root: string }) {
+  const text = await $.fs.read(missionFile(at.root, at.id, 'events.jsonl')).catch(() => '')
+  return text.split('\n').flatMap((line): MissionRecord[] => {
+    try {
+      const r = asRecord(JSON.parse(line))
+      return r ? [r] : []
+    } catch {
+      return []
+    }
+  })
+}
+
+async function appendEvents($: EngineInterface, root: string, id: string, records: MissionRecord[]) {
+  if (!records.length) return
+  const path = missionFile(root, id, 'events.jsonl')
+  const before = await $.fs.read(path).catch(() => '')
+  await $.fs.write(path, before + records.map((r) => `${JSON.stringify(r)}\n`).join(''))
+}
+
+async function saveMission($: EngineInterface, root: string, m: Mission, records: MissionRecord[] = []) {
+  await $.fs.write(missionFile(root, m.id, 'mission.json'), `${JSON.stringify(m, null, 2)}\n`)
+  await appendEvents($, root, m.id, records)
+  await $.state.set(MISSION, { id: m.id, root, status: m.status })
+  $.ui.invalidate('ui.render')
+}
+
+const CHECK_MS = 300_000
+
+// One planned check, through Spark's check runner (verify.ts): cmd gets the command verbatim,
+// and past the limit the whole tree ends. Output is redacted before it is kept.
+// `log`: the log's file name, under `dir` in the mission's folder (`checks` for a pass, `tasks`).
+async function runCheck($: EngineInterface, root: string, id: string, check: PlannedCheck, dir: string, log: string): Promise<CheckResult> {
+  const base = { name: check.name, ...(check.criterion === undefined ? {} : { criterion: check.criterion }) }
+  if (!check.command) return { ...base, status: 'not-run', reason: check.reason ?? '' }
+  const tree = inRepo ? await treeNow(runner($)).catch(() => undefined) : undefined
+  const started = await $.clock.now()
+  try {
+    const r = await $.process.run(['node', '-e', CHECK_RUNNER, '--', check.command, String(CHECK_MS)], { cwd: root, timeoutMs: CHECK_MS + 30_000 })
+    const late = r.exitCode === 124 && r.stderr.includes(CHECK_TIMED_OUT)
+    const text = redact(`${r.stdout}${r.stderr}`).text
+    await $.fs.write(missionFile(root, id, `${dir}/${log}`), text)
+    const ms = (await $.clock.now()) - started
+    return {
+      ...base,
+      command: check.command,
+      status: late ? 'timed-out' : r.exitCode === 0 ? 'pass' : 'fail',
+      exit: r.exitCode,
+      ms,
+      ...(tree ? { tree } : {}),
+      tail: text.trimEnd().split('\n').slice(-40).join('\n'),
+      log,
+    }
+  } catch (err) {
+    return { ...base, command: check.command, status: 'fail', reason: redact(message(err)).text, ms: (await $.clock.now()) - started }
+  }
+}
+
+// Spark's own checks before a terminal mission's report: the app's plan (verify.ts), one at a
+// time. The results come back from memory for the report; only the records go to disk, queued.
+async function missionChecks($: EngineInterface, root: string, m: Mission): Promise<{ at: number; again: boolean; checks: CheckResult[] }> {
+  const pass = { at: await $.clock.now(), again: false, checks: [] as CheckResult[] }
+  try {
+    await planAndRun($, root, m, pass)
+  } catch (err) {
+    $.ui.toast(`✦ Spark's checks could not run: ${message(err)}`)
+  }
+  return pass
+}
+
+// The plan for `criteria` as the app makes it: the repo's files, the person's commands and trust,
+// the scripts changed since the start snapshot, and the gate.
+async function terminalPlan($: EngineInterface, root: string, m: Mission, criteria: Mission['criteria']) {
+  const io = gateIo($)
+  const files = await io.list(root)
+  const packageJson = files.includes('package.json') ? await io.read(`${root}/package.json`) : undefined
+  let changed: string[] | undefined
+  if (inRepo && m.startSha) {
+    const before = await io.run(['git', 'show', `${m.startSha}:package.json`], { cwd: root })
+    changed = changedScripts(before.exitCode === 0 ? before.stdout : '', packageJson ?? '')
+  }
+  const home = (await $.env.get('USERPROFILE')) ?? ''
+  return planChecks({
+    files,
+    packageJson,
+    configured: configuredFor(await sparkConfig($), root),
+    criteria,
+    trusted: !(await $.env.get('SPARK_UNTRUSTED')),
+    changedScripts: changed,
+    classify: (command) => classify(command, 'powershell', { repo: root, home }),
+  })
+}
+
+async function planAndRun($: EngineInterface, root: string, m: Mission, pass: { at: number; checks: CheckResult[] }) {
+  const plan = await terminalPlan($, root, m, m.criteria)
+  await queued(() => appendEvents($, root, m.id, [{ at: pass.at, kind: 'verify', again: false }]))
+  for (const [i, check] of plan.entries()) {
+    const result = await runCheck($, root, m.id, check, 'checks', `${i + 1}.log`)
+    pass.checks.push(result)
+    await queued(async () => appendEvents($, root, m.id, [{ at: await $.clock.now(), kind: 'check', ...result }]))
+  }
+}
+
+// ---------- terminal tasks: one turn each, as the app drives them (plan.ts decides) ----------
+
+const taskRecord = (at: number, id: string, event: TaskRecord['event'], attempt: number, more: Partial<TaskRecord> = {}): TaskRecord => ({ at, kind: 'task', id, event, attempt, ...more })
+
+// A task's turn ended: what it changed, its check, then a retry, the next task, or the end. Runs
+// outside the write queue, like the report; the next message goes into the prompt box.
+async function terminalTaskTurn($: EngineInterface, root: string, m: Mission) {
+  const tasks = m.tasks!
+  const records = await missionRecords($, { id: m.id, root })
+  const states = taskStates(tasks, records, { over: false })
+  const current = tasks.find((t) => states[t.id]!.state === 'running')
+  if (!current) return terminalFinish($, root, m)
+  const attempt = states[current.id]!.attempts
+  const started = records.filter((r): r is TaskRecord => r.kind === 'task' && r.id === current.id && r.event === 'started').at(-1)
+  const end = inRepo ? await pinSnapshot(runner($), `refs/spark/missions/${m.id}/task-${current.id}-${attempt}`, `mission ${m.id} task ${current.id}`).catch(() => undefined) : undefined
+  const files = started?.base && /^[0-9a-f]{40}$/.test(started.base) && end ? await numstat(runner($), started.base, end).catch(() => undefined) : undefined
+  let check: CheckResult | undefined
+  if (current.check) {
+    const planned = (await terminalPlan($, root, m, [{ text: current.title, how: current.check, by: 'claude' }])).find((p) => p.criterion === 0)
+    check = planned ? await runCheck($, root, m.id, { ...planned, name: `task ${current.id}` }, 'tasks', `${current.id}-${attempt}.log`) : undefined
+  }
+  const decision = afterCheck(current, attempt, check)
+  const now = await $.clock.now()
+  await queued(() =>
+    appendEvents($, root, m.id, [
+      taskRecord(now, current.id, decision.event, decision.event === 'retry' ? attempt + 1 : attempt, {
+        ...(files ? { files } : {}),
+        ...(check ? { check } : {}),
+        ...(decision.note ? { note: decision.note } : {}),
+      }),
+    ]),
+  )
+  // /mission cancel while the check ran: the result is kept, nothing more is sent.
+  const latest = await loadMission($, { id: m.id, root })
+  if (latest.status !== 'running') return
+  if (decision.event === 'retry') {
+    $.ui.toast(`✦ task ${current.id}'s check failed: Enter sends it back`)
+    return fillLater($, `\\${retryText(current, check!)}`)
+  }
+  const next = decision.event === 'done' ? nextTask(tasks, taskStates(tasks, await missionRecords($, { id: m.id, root }), { over: false })) : undefined
+  if (!next) return terminalFinish($, root, latest)
+  await queued(async () => appendEvents($, root, m.id, [taskRecord(await $.clock.now(), next.id, 'started', 1, end ? { base: end } : {})]))
+  $.ui.toast(`✦ task ${current.id} done: Enter sends task ${next.id}`)
+  fillLater($, `\\${taskText(next)}`)
+}
+
+// Every task done, or one failed for good: the mission ends and its report follows.
+async function terminalFinish($: EngineInterface, root: string, m: Mission) {
+  const states = taskStates(m.tasks!, await missionRecords($, { id: m.id, root }), { over: false })
+  const failed = m.tasks!.find((t) => states[t.id]!.state === 'failed')
+  const moved = move(m, failed ? 'blocked' : 'finished', failed ? `task ${failed.id}'s check failed twice` : 'every task is done', await $.clock.now())
+  await queued(() => saveMission($, root, moved.mission, [moved.record]))
+  await missionReport($, root, moved.mission)
+}
+
+// Runs outside the write queue, which the mod's other writes (gate records, tool calls) wait on:
+// a suite can take minutes. Only its writes are queued. Callers inside the queue don't await it.
+async function missionReport($: EngineInterface, root: string, m: Mission) {
+  const { mission, facts } = await gitFacts(inRepo ? runner($) : undefined, m, await $.clock.now())
+  // A pass whose checks could not run still reads as "Not verified", and the toast says why.
+  const pass = mission.status === 'finished' || mission.status === 'blocked' ? await missionChecks($, root, mission) : undefined
+  await queued(async () => {
+    const report = buildReport(mission, await missionRecords($, { id: m.id, root }), facts, pass)
+    await $.fs.write(missionFile(root, m.id, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
+    await saveMission($, root, mission)
+  })
+  await openPane($, MISSION_PANE, 'mission')
+}
+
+async function missionAction($: EngineInterface, at: { id: string; root: string }, action: 'approve' | 'cancel') {
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  if (action === 'cancel') {
+    if (FINAL.has(m.status)) return `✦ the mission is already ${m.status}`
+    const moved = move(m, 'cancelled', 'you cancelled it', now)
+    await saveMission($, at.root, moved.mission, [moved.record])
+    void missionReport($, at.root, moved.mission).catch(() => {})
+    return '✦ mission cancelled'
+  }
+  if (m.status !== 'review') return `✦ the mission is ${m.status}, not waiting for approval`
+  if (!m.criteria.length) return '✦ no criteria came back: /mission cancel and draft again, or edit them in the app'
+  const startSha = inRepo ? await pinSnapshot(runner($), `refs/spark/missions/${m.id}/start`, `mission ${m.id} start`).catch(() => undefined) : undefined
+  const moved = move(m, 'running', `you approved ${criteriaCount(m.criteria.length)}`, now)
+  const running: Mission = { ...moved.mission, approvedAt: now, ...(startSha ? { startSha } : {}) }
+  await saveMission($, at.root, running, [moved.record, ...(running.tasks?.length ? [taskRecord(now, running.tasks[0]!.id, 'started', 1, startSha ? { base: startSha } : {})] : [])])
+  fillLater($, `\\${runText(running)}`)
+  return '✦ approved: Enter sends the mission to Claude'
+}
+
+// A prompt sent while a mission runs, waits or is paused is yours; one sent to a waiting or
+// paused mission sets it running again.
+async function missionPrompt($: EngineInterface, text: string) {
+  const at = await read($, MISSION)
+  if (!at || !text || (at.status !== 'running' && at.status !== 'waiting' && at.status !== 'paused')) return
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  const you = youRecord(text, now)
+  if (m.status === 'running') return appendEvents($, at.root, m.id, [you])
+  const moved = move(m, 'running', m.status === 'waiting' ? 'you answered' : 'you wrote to Claude', now)
+  await saveMission($, at.root, moved.mission, [you, moved.record])
+}
+
+// Tool calls only add records: rewriting mission.json from here could undo a status a turn end
+// wrote in the meantime.
+async function missionTool(
+  $: EngineInterface,
+  at: { id: string; root: string },
+  e: { tool: string; tool_use_id?: string },
+  result: { isError?: boolean; deny?: string; text?: unknown },
+) {
+  const now = await $.clock.now()
+  const id = e.tool_use_id ?? String(now)
+  await appendEvents($, at.root, at.id, [
+    ...recordsFor({ kind: 'tool', id, name: e.tool, input: e as unknown as Record<string, unknown> }, now),
+    ...recordsFor({ kind: 'tool-result', id, isError: Boolean(result.isError || result.deny), output: String(result.text ?? result.deny ?? '') }, now),
+  ])
+}
+
+async function missionTurn($: EngineInterface, e: { answer: string; isAborted?: boolean; durationMs?: number }) {
+  const at = await read($, MISSION)
+  if (!at || (at.status !== 'draft' && at.status !== 'running')) return
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  // Esc stopped the turn: nothing finished, so the mission waits for the next prompt.
+  if (e.isAborted) {
+    const moved = move(m, m.status === 'draft' ? 'interrupted' : 'paused', m.status === 'draft' ? 'you stopped the draft' : 'you stopped the turn', now)
+    return saveMission($, at.root, moved.mission, [moved.record])
+  }
+  const log = await $.fs.read(`${at.root}/${GATE_LOG}`).catch(() => '')
+  const done = turnEnded(m, await missionRecords($, at), { ok: true, text: e.answer }, parseGateLines(log.slice(m.gateOffset)), log.length, now)
+  await saveMission($, at.root, done.mission, [...recordsFor({ kind: 'result', ok: true, text: e.answer, durationMs: e.durationMs }, now), ...done.records])
+  if (done.mission.status === 'review') {
+    $.ui.toast(`✦ ${criteriaCount(done.mission.criteria.length)} drafted: /mission shows them, /mission approve starts`)
+    await openPane($, MISSION_PANE, 'mission')
+  }
+  if (FINAL.has(done.mission.status)) void missionReport($, at.root, done.mission).catch(() => {})
+  else if (m.status === 'running' && done.mission.status === 'running' && done.mission.tasks?.length) {
+    // A turn that ends while the last one's check runs (you wrote meanwhile) isn't a task's end.
+    if (taskTurns.has(m.id)) return $.ui.toast("✦ Spark is still checking the last task: this turn isn't counted as a task")
+    taskTurns.add(m.id)
+    void terminalTaskTurn($, at.root, done.mission)
+      .catch((err) => $.ui.toast(`✦ Spark couldn't finish the task's turn: ${message(err)}`))
+      .finally(() => taskTurns.delete(m.id))
+  }
+}
+
+// Missions whose task turn Spark is still recording and checking.
+const taskTurns = new Set<string>()
+
+// ---------- /council in the terminal: the shared steps, with $.http and $.process as the I/O ----------
+
+// The council this session runs, kept in the module: its record can be large, and only the pane reads it.
+let councilNow: { record: Preflight & { run?: CouncilRecord; reduced?: boolean }; root: string; controller?: AbortController } | undefined
+
+async function councilKeys($: EngineInterface) {
+  return { openrouter: await read($, OPENROUTER_KEY), gemini: await read($, KEY) }
+}
+
+// One model call for the orchestrator. Claude proposers and judges need no tools, so they go
+// through the session's own client, which Stop cuts. The brief and the synthesis read the project:
+// a one-shot `claude -p` with read-only tools, which the mod can't stop (it ends within 10 minutes).
+// Hosted requests can't be stopped either; runCouncil counts what they cost if they answer late.
+function terminalCall($: EngineInterface, keys: { openrouter?: string; gemini?: string }, cwd: string, dataCollection: 'deny' | 'allow'): Call {
+  return async (seat, role, request, signal) => {
+    const { id, provider } = seat.candidate
+    if (provider === 'claude' && role !== 'brief' && role !== 'synth') {
+      const r = await $.model.complete({ model: id, system: request.system, prompt: request.user, maxTokens: Math.min(request.maxTokens, 64_000) }, { signal })
+      if (r.isAnswered) {
+        const u = r.usage
+        return { text: r.text, inTokens: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens, outTokens: u.output_tokens }
+      }
+      throw callError(r.reason === 'api-error' ? (r.status ?? undefined) : undefined, r.reason === 'api-error' ? `API error ${r.status ?? 'with no response'}` : r.reason)
+    }
+    if (provider === 'claude') {
+      const r = await $.process.run(['claude', ...claudeArgv(id, request.system, { readOnly: true })], { cwd, stdin: request.user, timeoutMs: 600_000 })
+      let json: unknown
+      try {
+        json = JSON.parse(r.stdout)
+      } catch {
+        throw callError(undefined, `claude exited with ${r.exitCode}`)
+      }
+      return parseClaude(json)
+    }
+    const { url, init } =
+      provider === 'openrouter'
+        ? openrouterRequest(id, request, { key: keys.openrouter ?? '', dataCollection })
+        : provider === 'gemini'
+          ? geminiRequest(id, request, { key: keys.gemini ?? '' })
+          : ollamaRequest(id, request)
+    const res = await $.http.fetch(url, init).catch((err) => {
+      throw callError(undefined, `network: ${message(err)}`)
+    })
+    let body: unknown = {}
+    try {
+      body = JSON.parse(res.text)
+    } catch {}
+    if (!res.ok) {
+      const error = (body as { error?: { message?: unknown } }).error?.message
+      throw Object.assign(callError(res.status, typeof error === 'string' ? error : `HTTP ${res.status}`), { waitMs: retryAfterMs(res.headers['retry-after']) })
+    }
+    return provider === 'openrouter' ? parseOpenRouter(body) : provider === 'gemini' ? parseGemini(body) : parseOllama(body)
+  }
+}
+
+// The terminal fetches catalogs each time; the app keeps them for 6 hours.
+async function councilCatalogs($: EngineInterface, keys: { openrouter?: string; gemini?: string }) {
+  const candidates: Candidate[] = [...CLAUDE_CANDIDATES]
+  const notes: string[] = []
+  const fetchJson = async (url: string, headers: Record<string, string>) => {
+    const res = await $.http.fetch(url, { headers })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return JSON.parse(res.text) as unknown
+  }
+  const sources: [string, string | undefined, () => Promise<unknown>, (j: unknown) => Candidate[]][] = [
+    ['openrouter', keys.openrouter, () => fetchJson('https://openrouter.ai/api/v1/models', { authorization: `Bearer ${keys.openrouter}` }), normalizeOpenRouter],
+    ['gemini', keys.gemini, () => fetchJson('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', { 'x-goog-api-key': keys.gemini ?? '' }), normalizeGemini],
+  ]
+  for (const [name, key, get, normalize] of sources) {
+    if (!key) {
+      notes.push(`${name}: no key`)
+      continue
+    }
+    try {
+      candidates.push(...normalize(await get()))
+    } catch (err) {
+      notes.push(`${name}: catalog not reachable (${message(err)})`)
+    }
+  }
+  try {
+    candidates.push(...normalizeOllama(await fetchJson('http://127.0.0.1:11434/api/tags', {})))
+  } catch {
+    notes.push('ollama: not running')
+  }
+  return { candidates, notes }
+}
+
+const saveCouncil = ($: EngineInterface, root: string, record: unknown) =>
+  queued(async () => {
+    const id = (record as { id: string }).id
+    await $.fs.write(`${root}/.spark/councils/${id}.json`, `${JSON.stringify(record, null, 2)}\n`)
+    if (inRepo) await ignoreSparkDir($)
+  })
+
+// Running a council from the pane is the consent it asked for: remembered in Spark's config,
+// where the app keeps it too.
+async function rememberCouncilConsent($: EngineInterface, providers: readonly string[], dataCollection: 'deny' | 'allow') {
+  const appData = await $.env.get('APPDATA')
+  if (!appData || !providers.length) return
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, unknown> }
+  const at = await $.clock.now()
+  const councilConsent = { ...(config.councilConsent ?? {}), ...Object.fromEntries(providers.map((p) => [p, { at, dataCollection }])) }
+  await $.fs.write(`${appData}/spark/config.json`, `${JSON.stringify({ ...config, councilConsent }, null, 2)}\n`)
+}
+
+async function councilPreflight($: EngineInterface, question: string, mode: Mode) {
+  const root = await repoTop($)
+  const keys = await councilKeys($)
+  const call = terminalCall($, keys, root, 'deny')
+  const sonnet = CLAUDE_CANDIDATES.find((c) => c.id === 'sonnet')!
+  const reply = await call({ candidate: sonnet, reason: 'writes the brief' }, 'brief', { system: BRIEF_SYSTEM, user: briefPrompt(question), maxTokens: 6000 }, new AbortController().signal)
+  const brief = parseBrief(reply.text)
+  if (!brief) throw new Error('the brief came back without a brief block; ask again with a clearer question')
+  const { candidates, notes } = await councilCatalogs($, keys)
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, unknown> }
+  const at = await $.clock.now()
+  const record = preflightRecord({ id: councilId(at, hex4()), question, mode, at, brief, ...(reply.usd === undefined ? {} : { briefCost: reply.usd }), candidates, notes, consents: config.councilConsent ?? {} })
+  councilNow = { record, root }
+  await saveCouncil($, root, record)
+  $.ui.invalidate('ui.render')
+  await openPane($, COUNCIL_PANE, 'council')
+}
+
+async function councilRun($: EngineInterface) {
+  const c = councilNow
+  if (!c || c.record.run) return '✦ no council is waiting to run'
+  const config = ((await sparkConfig($)) ?? {}) as { councilConsent?: Record<string, { dataCollection?: string }>; councilBudgetUsd?: unknown }
+  const budget = typeof config.councilBudgetUsd === 'number' && config.councilBudgetUsd >= 0 ? config.councilBudgetUsd : 1
+  const refusal = runRefusal(c.record, { consent: true, reduced: true }, budget)
+  if (refusal) return `✦ ${refusal}`
+  const dataCollection = config.councilConsent?.openrouter?.dataCollection === 'allow' ? 'allow' : 'deny'
+  await queued(() => rememberCouncilConsent($, c.record.consentNeeded, dataCollection)).catch(() => {})
+  const controller = new AbortController()
+  c.controller = controller
+  c.record = { ...c.record, consentNeeded: [], reduced: c.record.empty.length > 0 }
+  const shuffle = (n: number) => {
+    const order = [...Array(n).keys()]
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[order[i], order[j]] = [order[j]!, order[i]!]
+    }
+    return order
+  }
+  const keep = (record: CouncilRecord) => {
+    c.record = { ...c.record, run: record }
+    $.ui.invalidate('ui.render')
+    return saveCouncil($, c.root, c.record).catch(() => {})
+  }
+  void runCouncil({
+    brief: c.record.brief,
+    panel: panelOf(c.record),
+    mode: c.record.mode,
+    call: terminalCall($, await councilKeys($), c.root, dataCollection),
+    notify: ({ record }) => void keep(record),
+    shuffle,
+    sleep: (ms) => $.clock.sleep(ms),
+    deadline: (ms) => $.clock.sleep(ms),
+    signal: controller.signal,
+  })
+    .then(keep)
+    .catch((err) => $.ui.toast(`✦ council: ${message(err)}`))
+  return '✦ council running: the pane shows each model as it answers'
+}
+
+async function councilMission($: EngineInterface) {
+  const c = councilNow
+  if (!c) return '✦ no council in this session'
+  const plan = missionPlan(c.record)
+  if ('error' in plan) return `✦ ${plan.error}`
+  const at = await read($, MISSION)
+  if (at && !FINAL.has(at.status)) return `✦ a mission is ${at.status}: /mission cancel ends it first`
+  return queued(async () => {
+    const root = await repoTop($)
+    const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
+    const { mission, record } = newMission(plan.objective, await $.clock.now(), hex4(), gateOffset, { criteria: plan.criteria, plan: plan.plan })
+    await saveMission($, root, mission, [record])
+    return `✦ mission created from the council with ${criteriaCount(mission.criteria.length)}: /mission shows them, /mission approve starts it`
+  })
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -665,6 +1171,11 @@ export const register: Register = (on, options) => {
       await $.state.set(KEY, key)
       await $.env.set('SPARK_GEMINI_KEY', undefined)
     }
+    const openrouter = await $.env.get('SPARK_OPENROUTER_KEY')
+    if (openrouter) {
+      await $.state.set(OPENROUTER_KEY, openrouter)
+      await $.env.set('SPARK_OPENROUTER_KEY', undefined)
+    }
     await $.command.register({ name: 'thinking-red-team', description: MODE_DESCRIPTIONS['thinking-red-team'] })
     await $.command.register({ name: 'anti-slop', description: MODE_DESCRIPTIONS['anti-slop'] })
     await $.command.register({ name: 'spark-modes', description: 'Spark: show active modes, or "off" to clear them', argumentHint: '[off]' })
@@ -726,12 +1237,17 @@ export const register: Register = (on, options) => {
     // A continuation (empty text, as after the test gate's block) is the same piece of work:
     // its snapshot stays, so what the turn changed is still measured from the prompt.
     if (inRepo && !(e.text === '' && (await read($, TURN)))) await beginTurn($, e.text)
+    void queued(() => missionPrompt($, e.text)).catch(() => {})
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
     const input = e as { file_path?: unknown; notebook_path?: unknown; command?: unknown }
     const file = input.file_path ?? input.notebook_path
+    if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && inSparkDir(file, await repoTop($))) return { deny: SPARK_DIR_REASON }
+    // A draft only reads, subagents included: the terminal has no plan mode behind this.
+    const missionAt = await read($, MISSION)
+    if (missionAt?.status === 'draft' && DRAFT_DENIED.has(e.tool)) return { deny: DRAFT_DENIAL }
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && (await read($, HALT)) && !editAllowedWhileHalted(file, await repoTop($)))
       return { deny: HALT_REASON }
     const unread = e.tool === 'Read' && typeof file === 'string' ? readDenied(file, await repoTop($)) : undefined
@@ -739,8 +1255,10 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     const shell = e.tool === 'Bash' || e.tool === 'PowerShell'
     let out = result
-    if (shell && !e.agentId && typeof input.command === 'string' && isBuild(input.command) && !result.deny)
+    if (shell && !e.agentId && typeof input.command === 'string' && isBuild(input.command) && !result.deny) {
+      await recordGate($, 'build', !result.isError).catch(() => {})
       if (await countOutcome($, !result.isError)) out = { ...result, context: [...(result.context ?? []), HALT_REASON] } as typeof result
+    }
     // The tool has run: a failure from here on must not lose its result.
     if (shell && result.deny === undefined && !result.isError) out = (await pruneShell($, e.tool_use_id, out).catch(() => undefined)) ?? out
     if (!e.agentId && EDIT_TOOLS.has(e.tool) && typeof file === 'string' && !result.deny && !result.isError) {
@@ -749,6 +1267,8 @@ export const register: Register = (on, options) => {
     }
     const plan = e.tool === 'ExitPlanMode' && !e.agentId && !result.deny && !result.isError ? (result.result as { plan?: unknown })?.plan : undefined
     if (typeof plan === 'string' && plan.trim()) await saveDesignDoc($, plan)
+    if (missionAt && !e.agentId && (missionAt.status === 'draft' || missionAt.status === 'running'))
+      await queued(() => missionTool($, missionAt, e, result as { isError?: boolean; deny?: string; text?: unknown })).catch(() => {})
     return out
   })
 
@@ -782,6 +1302,7 @@ export const register: Register = (on, options) => {
     try {
       const untrusted = Boolean(await $.env.get('SPARK_UNTRUSTED'))
       const gate = await testGate(gateIo($), { base: turn.base, answer: e.last_assistant_message ?? '' }, await sparkConfig($), { untrusted })
+      if (gate) await recordGate($, 'tests', gate.ok, gate.ok ? { tree: gate.tree } : { exit: gate.exit, tree: gate.tree }).catch(() => {})
       if (gate && !(await countOutcome($, gate.ok)) && !gate.ok) return { ...done, block: gate.block }
     } catch (err) {
       $.ui.toast(`✦ tests not run: ${message(err)}`)
@@ -798,12 +1319,117 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId && reviewers.has(e.agentId)) await recordVerdict($, e.answer).catch(() => {})
-    if (!e.agentId)
+    if (!e.agentId) {
+      // The mission's turn end goes first, not behind the goal review's Gemini call.
+      void queued(() => missionTurn($, e)).catch(() => {})
       void endTurn($)
         .catch(() => {})
         .then(() => reviewGoal($, e, config))
         .catch(() => {})
+    }
     return done
+  })
+
+  on('command.run', { command: 'council' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    if (!args) return { text: '✦ /council [full] <question>; then /council run, /council cancel or /council mission' }
+    if (args === 'run') return { text: await councilRun($) }
+    if (args === 'mission') return { text: await councilMission($) }
+    if (args === 'cancel') {
+      if (councilNow?.record.run?.status !== 'running') return { text: '✦ no council is running' }
+      councilNow.controller?.abort()
+      return { text: "✦ council cancelled; finished answers are kept. Hosted requests and Claude's synthesis can't be stopped from here: if one still answers, its cost is added to the record" }
+    }
+    if (councilNow?.record.run?.status === 'running') return { text: '✦ a council is running: /council cancel stops it' }
+    const full = /^full\b/i.test(args)
+    const question = full ? args.slice(4).trim() : args
+    if (!question) return { text: '✦ /council [full] <question>' }
+    void councilPreflight($, question, full ? 'full' : 'light').catch((err) => $.ui.toast(`✦ council not started: ${message(err)}`))
+    return { text: '✦ council: Claude is writing the brief (read-only); the pane shows the panel when it is ready. Nothing leaves this machine until /council run.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: COUNCIL_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const c = councilNow?.record
+    if (!c) return <Text dimColor>no council in this session</Text>
+    const run = c.run
+    const seats = [...c.panel.proposers.map((s) => ['proposer', s] as const), ...c.panel.judges.map((s) => ['judge', s] as const), ['synth', c.panel.synth] as const]
+    const STATE_TONE: Record<string, string | undefined> = { done: '#4ADE80', failed: ERROR, 'timed out': ERROR, unavailable: '#FACC15', running: '#38BDF8' }
+    const a = run?.aggregate
+    return (
+      <Box flexDirection="column">
+        <Text bold>
+          council · {c.mode} · {run ? `${run.status}${run.status === 'running' ? ` · ${run.stage}` : ''}` : 'waiting for /council run'}
+        </Text>
+        <Text>{c.question}</Text>
+        <Text dimColor>brief: {c.brief.objective}</Text>
+        <Box marginTop={1} flexDirection="column">
+          {seats.map(([role, s]) => {
+            const log = run?.seats[`${role}:${s.id}`]
+            const state = log?.state ?? 'selected'
+            return (
+              <Text color={STATE_TONE[state]}>{`${role.padEnd(8)} ${s.id} · ${s.estimate.label} · ${state}${log && log.tries > 1 ? ` (${log.tries} tries)` : ''}${log?.error && state !== 'done' ? ` · ${log.error}` : ''}`}</Text>
+            )
+          })}
+        </Box>
+        {c.empty.length ? <Text color="#FACC15">{`empty seats: ${c.empty.join(', ')}; /council run uses a reduced panel`}</Text> : null}
+        {c.notes.map((n) => (
+          <Text dimColor>{n}</Text>
+        ))}
+        {!run && c.consentNeeded.length ? <Text color="#FACC15">{`/council run sends the brief to ${c.consentNeeded.join(' and ')} (free endpoints may keep prompts); Spark remembers it`}</Text> : null}
+        {!run && c.estimate.meteredUsd > 0 ? <Text>{`paid models: ~$${c.estimate.meteredUsd.toFixed(2)} estimated`}</Text> : null}
+        {a ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>{`case: ${a.case} · ${a.judged} judges answered`}</Text>
+            {a.ranking.map((l) => (
+              <Text color={a.flags.some((f) => f.proposal === l) ? ERROR : undefined}>{`${l} ${run!.mapping[l] ?? ''}: mean ${a.mean[l]} · ${a.totals[l]!.join(' / ')} · Borda ${a.borda[l]}${a.flags.filter((f) => f.proposal === l).map((f) => ` · critical: ${f.issue}`).join('')}`}</Text>
+            ))}
+          </Box>
+        ) : null}
+        {run?.synthesis ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>synthesis</Text>
+            {run.synthesis
+              .split('\n')
+              .slice(0, 60)
+              .map((line) => (
+                <Text>{line}</Text>
+              ))}
+          </Box>
+        ) : null}
+        {run?.reason ? <Text color="#FACC15">{run.reason}</Text> : null}
+        <Box marginTop={1}>
+          {!run ? <Button key="council-run" label={c.empty.length ? 'run with a reduced panel' : 'run'} onPress={() => void councilRun($).then((t) => $.ui.toast(t))} /> : null}
+          {run?.status === 'running' ? <Button key="council-stop" label="stop" onPress={() => councilNow?.controller?.abort()} /> : null}
+          {run?.synthesis ? <Button key="council-mission" label="start as mission" onPress={() => void councilMission($).then((t) => $.ui.toast(t))} /> : null}
+        </Box>
+      </Box>
+    )
+  })
+
+  on('command.run', { command: 'mission' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    const at = await read($, MISSION)
+    try {
+      if (!args) {
+        if (!at) return { text: '✦ no mission. /mission <what should be true when it is done>' }
+        await openPane($, MISSION_PANE, 'mission')
+        return { text: '✦ mission pane open' }
+      }
+      if (args === 'approve' || args === 'cancel') return { text: at ? await queued(() => missionAction($, at, args)) : '✦ no mission' }
+      if (at && !FINAL.has(at.status)) return { text: `✦ a mission is ${at.status}: /mission cancel ends it first` }
+      const root = await repoTop($)
+      await queued(async () => {
+        const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
+        const { mission, record } = newMission(args, await $.clock.now(), hex4(), gateOffset)
+        await saveMission($, root, mission, [record])
+        if (inRepo) await ignoreSparkDir($)
+      })
+      fillLater($, `\\${draftText(args)}`)
+      return { text: '✦ mission created: Enter sends the draft request (Claude only reads). Then /mission approve.' }
+    } catch (err) {
+      return { text: `✦ ${message(err)}` }
+    }
   })
 
   on('command.run', { command: 'sandbox' }, async ($) => {
@@ -922,6 +1548,60 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: MISSION_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const at = await read($, MISSION)
+    if (!at) return <Text dimColor>no mission</Text>
+    const m = await loadMission($, at).catch(() => undefined)
+    if (!m) return <Text color={ERROR}>the mission file is unreadable</Text>
+    const records = await missionRecords($, at)
+    const rows = records.map(describe).filter((r): r is Row => r !== undefined).slice(-30)
+    const states = m.tasks?.length ? taskStates(m.tasks, records, { over: FINAL.has(m.status) }) : undefined
+    const report = await $.fs
+      .read(missionFile(at.root, at.id, 'report.json'))
+      .then((t) => JSON.parse(t) as unknown)
+      .catch(() => undefined)
+    return (
+      <Box flexDirection="column">
+        <Text bold>{m.title}</Text>
+        <Text dimColor>
+          {m.status} · {m.reason}
+        </Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>criteria</Text>
+          {m.criteria.length ? null : <Text dimColor>none yet</Text>}
+          {m.criteria.map((c, i) => (
+            <Text>{`${i + 1}. ${c.text} · ${c.how}`}</Text>
+          ))}
+        </Box>
+        {m.tasks && states ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>tasks · one at a time</Text>
+            {m.tasks.map((t) => {
+              const s = states[t.id]!
+              const tone = s.state === 'done' ? 'ok' : s.state === 'failed' ? 'fail' : s.state === 'running' ? 'warn' : 'info'
+              return <Text color={TONE[tone]}>{`${s.state === 'done' ? '✓' : s.state === 'failed' ? '✗' : s.state === 'running' ? '▶' : '·'} ${t.id} ${t.title} · ${s.state}${t.after.length ? ` · after ${t.after.join(', ')}` : ''}`}</Text>
+            })}
+          </Box>
+        ) : null}
+        {report
+          ? reportSections(report).map((s) => (
+              <Box marginTop={1} flexDirection="column">
+                <Text bold>{s.heading}</Text>
+                {s.lines.length ? s.lines.map((l) => <Text color={l.tone ? TONE[l.tone] : undefined}>{l.text}</Text>) : <Text dimColor>none</Text>}
+              </Box>
+            ))
+          : null}
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>timeline</Text>
+          {rows.map((r) => (
+            <Text color={TONE[r.tone]}>{`${r.glyph} ${r.text}`}</Text>
+          ))}
+        </Box>
       </Box>
     )
   })

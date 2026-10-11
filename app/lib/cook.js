@@ -40,7 +40,7 @@ export async function cookPrompt(text, { rewrite = true, pickSkills = true, skil
   ]);
   if (rewritten.status === 'rejected' && rewritten.reason?.fatal) throw rewritten.reason;
   const picked = routed.status === 'fulfilled' ? routed.value?.value ?? [] : [];
-  const base = rewritten.status === 'fulfilled' && rewritten.value ? rewritten.value.value : { prompt: safe, unclear: [] };
+  const base = rewritten.status === 'fulfilled' && rewritten.value ? { ...rewritten.value.value, by: rewritten.value.model } : { prompt: safe, unclear: [] };
   return {
     text: restore(composeCooked(base, picked)),
     model: rewritten.status === 'fulfilled' ? rewritten.value?.model : undefined,
@@ -50,7 +50,11 @@ export async function cookPrompt(text, { rewrite = true, pickSkills = true, skil
   };
 }
 
-const QUICK_SYSTEM = `You are Sparky, a quick-answer assistant inside Spark, a coding app. Answer briefly and directly in Markdown. You can't see or change the person's files; for work on the project, say they can switch the model to Claude.`;
+// Sparky's voice for answers in the window: Gemini quick answers and each model in Auto mode.
+export const SPARKY_SYSTEM = `You are Sparky, the assistant inside Spark, a coding app. The person's message may have been rewritten by Gemini before it reached you; answer what they asked.
+Format every answer in Markdown as 2 to 4 sections, each opening with a "## " header, with 3 to 6 "- " bullets under each. Code goes in a fenced block under the bullet it belongs to.
+Be specific and in depth: the steps, the trade-offs and the pitfalls. No preamble, no sign-off.
+You can't see or change the person's files. For work on the project, say they can switch the model to Claude.`;
 
 const answerText = (response) => {
   const parts = response?.candidates?.[0]?.content?.parts;
@@ -59,12 +63,12 @@ const answerText = (response) => {
 };
 
 // A quick answer from Gemini: the recent chat as context, pasted images included.
-export async function quickAnswer(history, { rewriteModels, ...options }) {
+export async function quickAnswer(history, { rewriteModels, system = SPARKY_SYSTEM, ...options }) {
   const contents = history.map((m) => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [...(m.images ?? []).map((i) => ({ inlineData: { mimeType: i.mediaType, data: i.data } })), { text: m.text || ' ' }],
   }));
-  const body = { systemInstruction: { parts: [{ text: QUICK_SYSTEM }] }, contents, generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } };
+  const body = { systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } };
   const { value, model } = await askChain(rewriteModels, body, answerText, options);
   return { text: value, model };
 }

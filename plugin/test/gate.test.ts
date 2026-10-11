@@ -213,3 +213,12 @@ test('a bare force push is blocked while main is checked out', async ($, on) => 
   on('tool.check', () => ({ decision: 'ask' }))
   expect(await check($, 'git push -f')).toMatchObject({ decision: 'deny', reason: '✦ spark gate: blocked: force push to main' })
 })
+
+test('commands that name Spark mission records are blocked', () => {
+  for (const [c, shell] of [['echo {} >> .spark/gate.jsonl', 'bash'], ['Remove-Item .spark\\missions -Recurse', 'powershell'], ['cat ".spark/gate.jsonl"', 'bash']] as const) {
+    const v = classify(c, shell, ctx)
+    expect(v?.kind).toBe('deny')
+    expect(v?.reason).toContain('mission records')
+  }
+  expect(kind('cat .spark/out/toolu_1.txt')).not.toBe('deny')
+})

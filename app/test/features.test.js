@@ -6,7 +6,23 @@ import { join } from 'node:path';
 import { parseCommand, withModes } from '../lib/commands.js';
 import { payer, costLine } from '../lib/account.js';
 import { skillDescription, describeSkills, listSkills } from '../lib/skills.js';
-import { cookPrompt, quickAnswer } from '../lib/cook.js';
+import { cookPrompt, quickAnswer, SPARKY_SYSTEM } from '../lib/cook.js';
+
+test("Sparky answers in depth: 2 to 4 headed sections of 3 to 6 bullets, and knows Gemini may have rewritten the message", () => {
+  assert.match(SPARKY_SYSTEM, /2 to 4 sections, each opening with a "## " header, with 3 to 6 "- " bullets under each/);
+  assert.match(SPARKY_SYSTEM, /may have been rewritten by Gemini before it reached you/);
+});
+
+test('with rewriting off, the typed prompt goes out with only the Skills line', async () => {
+  const out = await cookPrompt('add a dark mode toggle please', {
+    key: 'k',
+    rewrite: false,
+    skills: [{ name: 'tdd', description: 'test first' }],
+    routeModels: ['r'],
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: '{"skills":["tdd"]}' }] } }] }) }),
+  });
+  assert.equal(out.text, 'add a dark mode toggle please\n\nSkills: tdd');
+});
 import { parseLine } from '../lib/stream.js';
 
 test('slash commands: modes and pickers stay in the window, anything else passes through', () => {
@@ -15,6 +31,8 @@ test('slash commands: modes and pickers stay in the window, anything else passes
   assert.deepEqual(parseCommand('/red-team'), { kind: 'mode', mode: 'thinking-red-team' });
   assert.deepEqual(parseCommand('/model Sonnet'), { kind: 'model', model: 'sonnet' });
   assert.deepEqual(parseCommand('/effort max'), { kind: 'effort', effort: 'max' });
+  assert.deepEqual(parseCommand('/marathon fix the parser --time 1h'), { kind: 'marathon', args: 'fix the parser --time 1h' });
+  assert.deepEqual(parseCommand('/marathon'), { kind: 'marathon', args: '' });
   assert.deepEqual(parseCommand('/superpowers:brainstorming plan a cache'), { kind: 'passthrough' });
   assert.equal(parseCommand('fix the bug'), null);
   assert.equal(withModes('fix it', ['anti-slop']), 'fix it\n\n<spark-modes>anti-slop</spark-modes>');
@@ -75,7 +93,9 @@ test('cooking rewrites and picks skills side by side, and the Skills line rides 
     skills: [{ name: 'tdd', description: 'Test-driven development' }],
     fetchImpl,
   });
-  assert.deepEqual(out, { text: 'Add a dark mode toggle.\n\nSkills: tdd', model: 'r', rewriteError: undefined, skills: ['tdd'], skillsModel: 's' });
+  assert.deepEqual(out, {
+    text: '(Gemini (r) rewrote this prompt from what I typed. If part of it seems to contradict what I meant, ask me.)\n\nAdd a dark mode toggle.\n\nSkills: tdd',
+    model: 'r', rewriteError: undefined, skills: ['tdd'], skillsModel: 's' });
 });
 
 test('with rewriting off, only the skills are added to the prompt as typed', async () => {
@@ -110,4 +130,20 @@ test('init carries the skills and key source; a result carries token usage', () 
     '{"type":"result","subtype":"success","result":"ok","total_cost_usd":0.2,"duration_ms":10,"usage":{"input_tokens":3,"output_tokens":420,"cache_read_input_tokens":12000,"cache_creation_input_tokens":300}}',
   );
   assert.deepEqual(result.usage, { input: 3, output: 420, cacheRead: 12000, cacheWrite: 300 });
+});
+
+test('/mission becomes a mission command with its arguments', () => {
+  assert.deepEqual(parseCommand('/mission rate-limit the login route'), { kind: 'mission', args: 'rate-limit the login route' });
+  assert.deepEqual(parseCommand('/mission'), { kind: 'mission', args: '' });
+});
+
+test('/council is Light by default; /council full is Full', () => {
+  assert.deepEqual(parseCommand('/council compare two cache designs'), { kind: 'council', mode: 'light', question: 'compare two cache designs' });
+  assert.deepEqual(parseCommand('/council full compare two cache designs'), { kind: 'council', mode: 'full', question: 'compare two cache designs' });
+  assert.deepEqual(parseCommand('/council'), { kind: 'council', mode: 'light', question: '' });
+});
+
+test('/council list shows the councils already run here', () => {
+  assert.deepEqual(parseCommand('/council list'), { kind: 'council-list' });
+  assert.deepEqual(parseCommand('/council list the options'), { kind: 'council', mode: 'light', question: 'list the options' });
 });

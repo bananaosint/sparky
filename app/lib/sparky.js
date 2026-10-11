@@ -124,6 +124,8 @@ const radial = (count, life = 700, reach = 7) =>
     return { kind: 'spark', x: 7.5, y: 8, dx: Math.cos(a) * r, dy: Math.sin(a) * r, life };
   });
 const ring = () => ({ kind: 'ring', x: 8, y: 9, dx: 0, dy: 0, life: 700 });
+// How hard a turn is pushing him, from the seconds it has run: 0 fresh, 1 after 30s, 2 after two minutes.
+const strain = (o) => (o.seconds >= 120 ? 2 : o.seconds >= 30 ? 1 : 0);
 
 export const MOVES = {
   idle: {
@@ -134,16 +136,33 @@ export const MOVES = {
       wings: (t >= 1200 && t < 1320) || (t >= 1440 && t < 1560) ? -1 : 0,
     }),
   },
+  // A long turn shows: sparks come faster, then he squints and sweats.
   work: {
     loop: 1600,
-    frame: (t) => ({
+    frame: (t, o) => ({
       y: -0.5 * Math.abs(Math.sin((Math.PI * t) / 400)),
+      eyes: strain(o) === 2 ? 'lid' : 'open',
       pupil: { x: t < 800 ? 0 : 1, y: 0 },
       bolts: Math.floor(t / 100) % 3 === 0 ? 1 : 0.25,
       tap: Math.floor(t / 200) % 2 ? 'left' : null,
       g: 1 + 0.15 * wave(t, 800),
     }),
-    particles: () => [{ at: 0, every: 260, make: (k) => spark(TIPS[k % 2], noise(k)) }],
+    particles: (o) => [
+      { at: 0, every: [260, 150, 110][strain(o)], make: (k) => spark(TIPS[k % 2], noise(k)) },
+      ...(strain(o) === 2 ? [{ at: 700, every: 1400, make: (k) => ({ kind: 'sweat', x: 13, y: 5, dx: 0.5 + noise(k) * 0.5, dy: 5, life: 900 }) }] : []),
+    ],
+  },
+  // A tool call failed mid-turn: a smaller oops, and he gets back to work.
+  flinch: {
+    length: 500,
+    frame: (t) => ({
+      x: t < 300 ? 0.6 * Math.sin(t / 18) * (1 - t / 300) : 0,
+      sx: t < 120 ? 1.06 : 1,
+      sy: t < 120 ? 0.92 : 1,
+      eyes: t < 260 ? 'shut' : t < 420 ? 'lid' : 'open',
+      tint: t < 240 ? [HURT, 0.35] : null,
+    }),
+    particles: () => [{ at: 60, make: () => ({ kind: 'smoke', x: TIPS[1][0], y: TIPS[1][1], dx: 1, dy: -4, life: 700 }) }],
   },
   cook: {
     loop: 960,
@@ -170,12 +189,17 @@ export const MOVES = {
       const wobble = 0.06 * (1 - clamp(p)) * Math.cos(p * 18);
       return { ...face, sx: 1 - wobble, sy: 1 + wobble, wings: 0 };
     },
-    particles: () => [
-      {
-        at: 140,
-        make: () => [...radial(14), ...[0, 1, 2].map((k) => ({ kind: 'star', x: 3 + k * 4.5, y: 2, dx: (k - 1) * 3, dy: -6, life: 900 }))],
-      },
-    ],
+    // The bigger the turn, the bigger the burst: every ten tool calls add sparks and a ring, up to two.
+    particles: (o) => {
+      const big = Math.min(2, Math.floor((o.tools || 0) / 10));
+      return [
+        {
+          at: 140,
+          make: () => [...radial(14 + 8 * big), ...[0, 1, 2].map((k) => ({ kind: 'star', x: 3 + k * 4.5, y: 2, dx: (k - 1) * 3, dy: -6, life: 900 }))],
+        },
+        ...[140, 320].slice(0, big).map((at) => ({ at, make: ring })),
+      ];
+    },
   },
   oops: {
     length: 1400,
@@ -267,7 +291,7 @@ export const MOVES = {
   },
 };
 
-// The frame of a move at t ms since it started. o: { sprite, glow, look, hat, level }.
+// The frame of a move at t ms since it started. o: { sprite, glow, look, hat, level, seconds, tools }.
 export function frameAt(name, t, o) {
   const move = MOVES[name];
   const time = move.loop ? t % move.loop : Math.min(t, move.length);

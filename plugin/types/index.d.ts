@@ -16,6 +16,9 @@ export type Goal = {
   review: { met: boolean; next: string; why: string } | null
 }
 
+// The contract can't import: this repeats Status from hooks/mission.ts.
+export type MissionStatus = 'draft' | 'review' | 'running' | 'waiting' | 'paused' | 'interrupted' | 'finished' | 'blocked' | 'cancelled'
+
 export type FailureRecord = { command: string; cwd: string; exitCode: number; output: string; at: number }
 
 declare module 'claude-code' {
@@ -24,6 +27,7 @@ declare module 'claude-code' {
       phase: CookPhase
       modes: ModeName[]
       geminiKey: string
+      openrouterKey: string
       sandbox: boolean
       turn: TurnRef | null
       review: TurnRef | null
@@ -34,6 +38,7 @@ declare module 'claude-code' {
       streak: number
       halt: { at: number } | null
       verdicts: Record<string, { head: string; pass: boolean }>
+      mission: { id: string; root: string; status: MissionStatus } | null
     }
   }
 }

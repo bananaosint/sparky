@@ -22,7 +22,7 @@ test('every move draws a whole 16×16 Sparky at any moment', () => {
 });
 
 test('one-shot moves end and hand back; loops never end', () => {
-  for (const name of ['assemble', 'cheer', 'oops', 'alert', 'charge', 'poke']) {
+  for (const name of ['assemble', 'cheer', 'oops', 'alert', 'charge', 'poke', 'flinch']) {
     assert.equal(at(name, 0).done, false, name);
     assert.equal(at(name, 5000).done, true, name);
   }
@@ -61,6 +61,39 @@ test('oops shakes him with ×_× eyes, then settles', () => {
   assert.notDeepEqual(pixels[6][3], sprite[6][3]);
   assert.equal(at('oops', 1399).move.x, 0);
   assert.ok(emits('oops', 0, 1400, { sprite, glow }).some((p) => p.kind === 'smoke'));
+});
+
+test('a failed tool call makes him flinch: a quick jolt with eyes squeezed shut, smaller than oops', () => {
+  const { pixels, move } = at('flinch', 80);
+  assert.notEqual(move.x, 0);
+  for (const [x, y] of EYE_PIXELS) assert.ok(!white(pixels[y][x]), `eye pixel ${x},${y}`);
+  assert.notDeepEqual(pixels[6][3], sprite[6][3]);
+  assert.equal(at('flinch', MOVES.flinch.length - 1).move.x, 0);
+  assert.ok(MOVES.flinch.length < MOVES.oops.length);
+  const smoke = (name, length) => emits(name, 0, length, { sprite, glow }).filter((p) => p.kind === 'smoke').length;
+  assert.ok(smoke('flinch', MOVES.flinch.length) >= 1);
+  assert.ok(smoke('flinch', MOVES.flinch.length) < smoke('oops', MOVES.oops.length));
+});
+
+test('long turns strain him: sparks come faster after 30s, and after 2 minutes he squints and sweats', () => {
+  const work = (seconds) => emits('work', 0, 3200, { sprite, glow, seconds });
+  const sparks = (seconds) => work(seconds).filter((p) => p.kind === 'spark').length;
+  assert.equal(sparks(0), sparks(undefined));
+  assert.ok(sparks(45) > sparks(0));
+  assert.ok(sparks(150) > sparks(45));
+  assert.ok(!work(45).some((p) => p.kind === 'sweat'));
+  assert.ok(work(150).some((p) => p.kind === 'sweat'));
+  assert.ok(white(at('work', 0, { seconds: 45 }).pixels[7][5]));
+  assert.ok(!white(at('work', 0, { seconds: 150 }).pixels[7][5]));
+});
+
+test('a cheer grows with the turn: more tool calls, more sparks, and rings for the big ones', () => {
+  const burst = (tools) => emits('cheer', 0, 1200, { sprite, glow, tools });
+  const count = (tools, kind) => burst(tools).filter((p) => p.kind === kind).length;
+  assert.equal(count(0, 'spark'), count(undefined, 'spark'));
+  assert.ok(count(12, 'spark') > count(3, 'spark'));
+  assert.ok(count(30, 'spark') > count(12, 'spark'));
+  assert.deepEqual([3, 12, 30, 90].map((n) => count(n, 'ring')), [0, 1, 2, 2]);
 });
 
 test('asleep, his eyes are shut and z’s drift up', () => {
