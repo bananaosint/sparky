@@ -105,7 +105,15 @@ export async function runChecks(plan, { cwd, logDir, exec = shellExec, now = Dat
   };
   const results = [];
   for (const [i, check] of plan.entries()) {
-    const result = await one(check, i);
+    // A check that breaks (its log can't be written) fails on its own: the pass goes on, so no
+    // planned check goes missing from the verdict.
+    const result = await one(check, i).catch((e) => ({
+      name: check.name,
+      ...(check.criterion !== undefined && { criterion: check.criterion }),
+      ...(check.command ? { command: check.command } : {}),
+      status: 'fail',
+      reason: redact(String(e?.message ?? e)).text,
+    }));
     results.push(result);
     onResult(result);
   }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planFor, planTaskCheck, runChecks, shellExec, stopChecks } from '../lib/verify-run.js';
@@ -109,4 +109,21 @@ test("a task's check is planned by the same rules as a criterion's, under the ta
   assert.match(asked.reason, /^the gate would ask/);
   const untrusted = await planTaskCheck({ cwd: dir, mission, task: { id: 't4', title: 'x', do: 'x', after: [], check: 'node --test' }, config: {}, trusted: false });
   assert.match(untrusted.reason, /untrusted/);
+});
+
+test('a check whose log cannot be written fails with the reason, and the checks after it still run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spark-verify-'));
+  mkdirSync(join(dir, 'checks', '1.log'), { recursive: true });
+  const ran = [];
+  const results = await runChecks(
+    [
+      { name: 'tests', command: 'npm test' },
+      { name: 'criterion 1', criterion: 0, command: 'npm run bench' },
+    ],
+    { cwd: dir, logDir: join(dir, 'checks'), exec: async (c) => (ran.push(c), { exitCode: 0, output: 'ok', timedOut: false }), now: Date.now },
+  );
+  assert.deepEqual(ran, ['npm test', 'npm run bench']);
+  assert.equal(results[0].status, 'fail');
+  assert.match(results[0].reason, /EISDIR|illegal operation/i);
+  assert.equal(results[1].status, 'pass');
 });
