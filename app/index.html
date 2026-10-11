@@ -17,6 +17,7 @@
         <div id="status" class="status">starting…</div>
       </div>
       <nav class="actions">
+        <button id="missions-open" title="Missions: work toward criteria you approve, with a recorded report">Missions</button>
         <button id="new" title="Start a new chat">＋ New</button>
         <button id="folder" title="Open another project folder">folder</button>
         <button id="theme" title="Switch between ultraviolet and teal">◐</button>
@@ -40,13 +41,24 @@
       </section>
     </main>
 
+    <section id="missions" hidden aria-label="Missions">
+      <aside class="mission-list">
+        <form id="mission-new" autocomplete="off">
+          <label for="mission-objective" class="mission-label">New mission</label>
+          <input id="mission-objective" placeholder="What should be true when it's done?" />
+        </form>
+        <ol id="mission-items"></ol>
+      </aside>
+      <article id="mission-detail" class="mission-detail"></article>
+    </section>
+
     <form id="composer" autocomplete="off">
       <div id="attachments"></div>
       <div id="chips" class="chips-row"></div>
       <textarea
         id="input"
         rows="1"
-        placeholder="Ask Sparky to build something…   Enter: Gemini rewrites, Enter again sends · Tab Tab sends as typed · Shift+Enter new line · /marathon, /model"
+        placeholder="Ask Sparky to build something…   Enter: Gemini rewrites, Enter again sends · Tab Tab sends as typed · Shift+Enter new line · /mission, /marathon, /model"
       ></textarea>
       <div class="composer-bar">
         <button type="button" id="engine" class="engine" popovertarget="engine-panel" title="Who answers, and how hard it thinks">

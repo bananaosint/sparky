@@ -210,6 +210,8 @@ export function approvedCriteria(drafted: readonly Criterion[], sent: unknown): 
   })
 }
 
+export const criteriaCount = (n: number) => `${n} ${n === 1 ? 'criterion' : 'criteria'}`
+
 const listed = (m: Mission) => m.criteria.map((c, i) => `${i + 1}. ${c.text} (check: ${c.how})`)
 
 export const draftText = (objective: string) =>
@@ -254,7 +256,7 @@ export const resumeText = (m: Mission) =>
 export function onTurnEnd(m: Mission, turn: { ok: boolean; text: string }, halted: boolean): TurnEnd {
   if (m.status === 'draft') {
     const drafted = turn.ok ? parseMissionBlock(turn.text) : undefined
-    if (drafted) return { to: 'review', reason: `${drafted.criteria.length} criteria drafted`, drafted }
+    if (drafted) return { to: 'review', reason: `${criteriaCount(drafted.criteria.length)} drafted`, drafted }
     return { to: 'review', reason: turn.ok ? 'no mission block came back; write the criteria' : 'the draft turn failed; write the criteria' }
   }
   if (!turn.ok) return { to: 'blocked', reason: `the turn failed: ${clip(turn.text || 'no message', 200)}` }

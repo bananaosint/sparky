@@ -8,6 +8,7 @@ import {
   FINAL,
   LIVE,
   approvedCriteria,
+  criteriaCount,
   draftText,
   isSessionId,
   move,
@@ -138,7 +139,7 @@ export function createMissionRunner({ store, write, notify, run, now, hex4 }) {
       if (!criteria.length) return { error: 'a mission needs at least one criterion' };
       const startSha = run ? await pinSnapshot(run, `refs/spark/missions/${id}/start`, `mission ${id} start`).catch(() => undefined) : undefined;
       if (active?.id !== id || active.status !== 'review') return { error: 'the mission changed while its snapshot was taken' };
-      const m = step({ ...active, criteria }, 'running', `you approved ${criteria.length} criteria`, { approvedAt: now(), ...(startSha ? { startSha } : {}) });
+      const m = step({ ...active, criteria }, 'running', `you approved ${criteriaCount(criteria.length)}`, { approvedAt: now(), ...(startSha ? { startSha } : {}) });
       write(userMessage({ text: runText(m) }));
       return { mission: m };
     },

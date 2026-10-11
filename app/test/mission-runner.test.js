@@ -60,6 +60,7 @@ test('while drafting, writes and shell commands are refused and recorded; after 
   assert.equal(t.r.draftDenial('Read', { file_path: 'C:/app/src/auth.js' }), undefined);
   t.r.onEvent(result(DRAFT));
   await t.r.approve(mission.id, [{ text: 'A sixth failed login gets 429', how: 'npm test' }]);
+  assert.equal(t.store.read(mission.id).mission.reason, 'you approved 1 criterion');
   assert.equal(t.r.draftDenial('Edit', { file_path: 'C:/app/src/auth.js' }), undefined);
   assert.deepEqual(
     t.store.read(mission.id).records.filter((x) => x.kind === 'permission').map((x) => [x.tool, x.decision]),

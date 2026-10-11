@@ -6,6 +6,7 @@ import { elapsed } from './lib/elapsed.js';
 import { doubleTab } from './lib/keys.js';
 import { voxelize, project, closeEyes } from './lib/voxel.js';
 import { MOVES, HATS, frameAt, emits } from './lib/sparky.js';
+import { createMissionsView } from './lib/missions-view.js';
 
 const $ = (id) => document.getElementById(id);
 function el(tag, cls, text) {
@@ -51,6 +52,8 @@ let model = '';
 let turnTools = 0;
 // The running marathon as main.js last reported it, for the header.
 let marathonState = null;
+// The mission this window runs, as main last reported it, for the header.
+let activeMission = null;
 // Skills Gemini picked for the prompt in the box, and which model picked them.
 let picked = { skills: [], model: '' };
 // The recent chat, for Gemini's quick answers.
@@ -410,7 +413,8 @@ function renderStatus() {
   const effort =
     settings.model === 'ultracode' ? ' · max effort' : !['gemini', 'auto'].includes(settings.model) && settings.effort !== 'default' ? ` · ${settings.effort} effort` : '';
   const marathon = marathonState ? ` · ${statusLine(marathonState, Date.now())}` : '';
-  $('status').textContent = `${where} · ${answering}${effort}${marathon} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
+  const mission = activeMission ? ` · mission ${activeMission.status} ${elapsed(Date.now() - (activeMission.approvedAt ?? activeMission.createdAt))}` : '';
+  $('status').textContent = `${where} · ${answering}${effort}${marathon}${mission} · ${settings.hasKey ? 'gemini on' : 'gemini off'}`;
   $('status').title = marathonState ? $('status').textContent : cwd;
   hat = settings.model in HATS ? settings.model : undefined;
   renderEngine();
@@ -520,6 +524,136 @@ spark.on('ultra', () => {
   setBusy(true);
   append(el('div', 'result', '✦ UltraCode review pass: checking the change against your request'));
 });
+
+// ---------- missions ----------
+
+const missionsView = createMissionsView({
+  spark,
+  el,
+  markdown,
+  onStart: (objective) => startMission(objective),
+  onToggle(open) {
+    $('missions').hidden = !open;
+    list.hidden = open;
+    composer.hidden = open;
+    $('missions-open').classList.toggle('on', open);
+    $('missions-open').setAttribute('aria-pressed', String(open));
+    if (!open) input.focus();
+  },
+});
+$('missions-open').addEventListener('click', () => (missionsView.isOpen() ? missionsView.close() : missionsView.open(activeMission?.id)));
+
+async function startMission(objective) {
+  if (busy) return note('Sparky is still working: wait, or press ■ to stop.');
+  if (marathonState) return note('a marathon is running: /marathon stop ends it first');
+  const out = await spark.mission({ action: 'start', objective });
+  if (out.error) return note(out.error);
+  missionsView.close();
+  const card = el('div', 'mission-card drafting');
+  card.append(
+    el('div', 'mission-kicker', 'Mission'),
+    el('div', 'mission-title', out.mission.objective),
+    el('p', 'mission-note', 'Claude is reading the project to draft acceptance criteria. Nothing changes while it drafts.'),
+  );
+  append(card);
+  turnTools = 0;
+  setBusy(true);
+}
+
+function missionCommand(args) {
+  input.value = '';
+  autosize();
+  if (!args) return missionsView.open(activeMission?.id);
+  if (args === 'cancel') {
+    if (!activeMission) return note('no mission running');
+    return spark.mission({ action: 'cancel', id: activeMission.id }).then((out) => out.error && note(out.error));
+  }
+  startMission(args);
+}
+
+function criteriaCard(mission) {
+  const card = el('div', 'mission-card');
+  card.append(el('div', 'mission-kicker', 'Mission · approve the criteria'), el('div', 'mission-title', mission.title));
+  if (!mission.criteria.length) card.append(el('p', 'mission-warn', mission.reason));
+  const rows = el('ol', 'criteria');
+  const addRow = (c = { text: '', how: '' }) => {
+    const li = el('li', 'criterion');
+    const text = el('input');
+    text.value = c.text;
+    text.placeholder = 'One outcome someone can check';
+    text.setAttribute('aria-label', 'Criterion');
+    const how = el('input', 'how');
+    how.value = c.how;
+    how.placeholder = 'test, command, or manual';
+    how.setAttribute('aria-label', 'How it is checked');
+    const x = el('button', 'remove', '×');
+    x.type = 'button';
+    x.title = 'Remove this criterion';
+    x.setAttribute('aria-label', 'Remove this criterion');
+    x.addEventListener('click', () => li.remove());
+    li.append(text, how, x);
+    rows.append(li);
+    return text;
+  };
+  (mission.criteria.length ? mission.criteria : [undefined]).forEach((c) => addRow(c));
+  const add = el('button', 'ghost', '+ criterion');
+  add.type = 'button';
+  add.addEventListener('click', () => addRow().focus());
+  const bar = el('div', 'buttons');
+  const go = el('button', 'yes', 'Approve and start');
+  const cancel = el('button', 'no', 'Cancel mission');
+  go.type = cancel.type = 'button';
+  const settle = (cls, text) => {
+    bar.replaceWith(el('div', `answered ${cls}`, text));
+    add.remove();
+    for (const n of rows.querySelectorAll('input, button')) n.disabled = true;
+  };
+  go.addEventListener('click', async () => {
+    const criteria = [...rows.children].map((li) => ({ text: li.children[0].value, how: li.children[1].value }));
+    const out = await spark.mission({ action: 'approve', id: mission.id, criteria });
+    if (out.error) return note(out.error);
+    settle('allowed', `Approved ${out.mission.criteria.length} criteria`);
+    turnTools = 0;
+    setBusy(true);
+  });
+  cancel.addEventListener('click', async () => {
+    const out = await spark.mission({ action: 'cancel', id: mission.id });
+    if (out.error) return note(out.error);
+    settle('denied', 'Mission cancelled');
+  });
+  bar.append(go, cancel);
+  card.append(rows, add, bar);
+  return card;
+}
+
+spark.on('mission', (m) => {
+  if (m.kind === 'state') {
+    if (m.active) activeMission = m.mission;
+    else if (activeMission?.id === m.mission.id) activeMission = null;
+    renderStatus();
+    missionsView.update(m.mission);
+  }
+  if (m.kind === 'row') missionsView.addRow(m.id, m.row);
+  if (m.kind === 'review') {
+    setBusy(false);
+    append(criteriaCard(m.mission));
+  }
+  if (m.kind === 'report') {
+    const status = m.sections[0]?.lines[0]?.text || m.mission.status;
+    const line = el('div', m.mission.status === 'finished' ? 'result' : 'result failed', `◆ mission ${status} · `);
+    const open = el('button', 'link', 'open the report');
+    open.type = 'button';
+    open.addEventListener('click', () => missionsView.open(m.id));
+    line.append(open);
+    append(line);
+    missionsView.showReport(m.id);
+  }
+  if (m.kind === 'error') append(el('div', 'result failed', `✗ mission: ${m.error}`));
+});
+setInterval(() => {
+  if (activeMission) renderStatus();
+  missionsView.tick();
+}, 1000);
 
 spark.on('permission', ({ id, tool, input, note }) => {
   const card = el('div', 'permission');
@@ -718,6 +852,7 @@ function marathonCommand(args) {
     return note(marathonState ? statusLine(marathonState, Date.now()) : 'no marathon running · /marathon <task> [--time 1.5h] [--tokens 2m]');
   }
   if (settings.model === 'gemini' || settings.model === 'auto') return note('a marathon needs Claude Code: pick a Claude model or UltraCode first');
+  if (activeMission) return note('a mission is running: finish or cancel it first');
   if (marathonState) return note('a marathon is already running · /marathon stop ends it');
   spark.marathon({ action: 'start', task: parsed.task, limits: parsed.limits });
   sendNow(parsed.task);
@@ -729,6 +864,10 @@ function runCommand(text) {
   if (!command || command.kind === 'passthrough') return false;
   if (command.kind === 'marathon') {
     marathonCommand(command.args);
+    return true;
+  }
+  if (command.kind === 'mission') {
+    missionCommand(command.args);
     return true;
   }
   if (command.kind === 'mode') {

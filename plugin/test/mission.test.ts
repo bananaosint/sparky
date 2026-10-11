@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import {
-  DRAFT_DENIED, approvedCriteria, asMission, draftText, isMissionId, isSessionId, missionId, move, newMission,
+  DRAFT_DENIED, approvedCriteria, asMission, criteriaCount, draftText, isMissionId, isSessionId, missionId, move, newMission,
   onTurnEnd, parseGateLines, parseMissionBlock, recordsFor, resumeFailed, resumeText, runText, turnEnded,
 } from '../hooks/mission'
 import type { Mission, MissionRecord } from '../hooks/mission'
@@ -101,6 +101,9 @@ test('turn ends: draft goes to review; then finished, waiting on a question, or 
   const draft = mission()
   expect(onTurnEnd(draft, { ok: true, text: DRAFT }, false)).toMatchObject({ to: 'review', reason: '2 criteria drafted' })
   expect(onTurnEnd(draft, { ok: true, text: 'no block' }, false)).toEqual({ to: 'review', reason: 'no mission block came back; write the criteria' })
+  expect(onTurnEnd(draft, { ok: true, text: '```mission\n{"criteria":[{"text":"x","how":"y"}]}\n```' }, false).reason).toBe('1 criterion drafted')
+  expect(criteriaCount(1)).toBe('1 criterion')
+  expect(criteriaCount(3)).toBe('3 criteria')
   const running = mission({ status: 'running', approvedAt: AT })
   expect(onTurnEnd(running, { ok: true, text: 'Done.' }, false).to).toBe('finished')
   expect(onTurnEnd(running, { ok: true, text: 'Should lockouts be per IP or per account?' }, false).to).toBe('waiting')
