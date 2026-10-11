@@ -27,14 +27,32 @@ import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes
 import { failurePrompt, parseFailure, trimOutput } from './failure'
 import { budgetLine, overLimit, parseGoal, turnTokens } from './goal'
 import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, SPARK_DIR_REASON, editAllowedWhileHalted, inSparkDir, isBuild } from './halt'
-import type { GateCheck } from './mission'
+import {
+  DRAFT_DENIAL,
+  DRAFT_DENIED,
+  FINAL,
+  asMission,
+  asRecord,
+  criteriaCount,
+  draftText,
+  move,
+  newMission,
+  parseGateLines,
+  recordsFor,
+  runText,
+  turnEnded,
+  youRecord,
+} from './mission'
+import type { GateCheck, Mission, MissionRecord } from './mission'
+import { buildReport, describe, gitFacts, reportSections } from './mission-report'
+import type { Row } from './mission-report'
 import { pruneOutput, readDenied } from './prune'
 import { classify, mergeTargets, parseVerdict, previewArgv } from './gate'
 import type { Preview } from './gate'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
-import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
+import { fileDiffs, listSnapshots, pinSnapshot, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
@@ -277,9 +295,13 @@ const GOAL = { plugin: 'spark', key: 'goal' } as const
 const STREAK = { plugin: 'spark', key: 'streak' } as const
 const HALT = { plugin: 'spark', key: 'halt' } as const
 const VERDICTS = { plugin: 'spark', key: 'verdicts' } as const
+const MISSION = { plugin: 'spark', key: 'mission' } as const
 
 const DIFF_PANE = 'spark:diff'
 const AGENTS_PANE = 'spark:agents'
+// ui.open ids are letters, digits, _ and - only.
+const MISSION_PANE = 'spark-mission'
+const TONE: Record<Row['tone'], string | undefined> = { ok: '#4ADE80', fail: ERROR, warn: '#FACC15', info: undefined }
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // The pane is for a glance; past this it says how many lines it left out.
 const PATCH_LINES = 400
@@ -295,6 +317,7 @@ const COMMANDS = [
   { name: 'sandbox', description: 'Spark: end each turn with keep or revert' },
   { name: 'spark-agents', description: 'Spark: subagents and worktrees, with test and merge' },
   { name: 'spark-unhalt', description: 'Spark: lift the halt once the post-mortem is written' },
+  { name: 'mission', description: 'Spark: work toward criteria you approve, with a recorded report', argumentHint: '<objective> | approve | cancel' },
   {
     name: 'goal',
     description: 'Spark: work toward a goal; after each turn Gemini reviews the changes and proposes the next step',
@@ -466,6 +489,110 @@ async function recordGate($: EngineInterface, check: GateCheck, ok: boolean, mor
   const before = await $.fs.read(path).catch(() => '')
   await $.fs.write(path, `${before}${line}\n`)
   await ignoreSparkDir($)
+}
+
+// Terminal missions keep the app's files: .spark/missions/<id>/{mission.json,events.jsonl,report.json}.
+const missionFile = (root: string, id: string, name: string) => `${root}/.spark/missions/${id}/${name}`
+const hex4 = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')
+// After a command the engine clears the box; fill it once that has happened.
+const fillLater = ($: EngineInterface, text: string) => void $.clock.sleep(30).then(() => $.prompt.fill({ text })).catch(() => {})
+
+async function loadMission($: EngineInterface, at: { id: string; root: string }) {
+  const m = asMission(JSON.parse(await $.fs.read(missionFile(at.root, at.id, 'mission.json'))))
+  if (!m || m.id !== at.id) throw new Error('the mission file is unreadable')
+  return m
+}
+
+async function missionRecords($: EngineInterface, at: { id: string; root: string }) {
+  const text = await $.fs.read(missionFile(at.root, at.id, 'events.jsonl')).catch(() => '')
+  return text.split('\n').flatMap((line): MissionRecord[] => {
+    try {
+      const r = asRecord(JSON.parse(line))
+      return r ? [r] : []
+    } catch {
+      return []
+    }
+  })
+}
+
+async function saveMission($: EngineInterface, root: string, m: Mission, records: MissionRecord[] = []) {
+  await $.fs.write(missionFile(root, m.id, 'mission.json'), `${JSON.stringify(m, null, 2)}\n`)
+  if (records.length) {
+    const path = missionFile(root, m.id, 'events.jsonl')
+    const before = await $.fs.read(path).catch(() => '')
+    await $.fs.write(path, before + records.map((r) => `${JSON.stringify(r)}\n`).join(''))
+  }
+  await $.state.set(MISSION, { id: m.id, root, status: m.status })
+  $.ui.invalidate('ui.render')
+}
+
+async function missionReport($: EngineInterface, root: string, m: Mission) {
+  const { mission, facts } = await gitFacts(inRepo ? runner($) : undefined, m, await $.clock.now())
+  const report = buildReport(mission, await missionRecords($, { id: m.id, root }), facts)
+  await $.fs.write(missionFile(root, m.id, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
+  await saveMission($, root, mission)
+  await openPane($, MISSION_PANE, 'mission')
+}
+
+async function missionAction($: EngineInterface, at: { id: string; root: string }, action: 'approve' | 'cancel') {
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  if (action === 'cancel') {
+    if (FINAL.has(m.status)) return `✦ the mission is already ${m.status}`
+    const moved = move(m, 'cancelled', 'you cancelled it', now)
+    await saveMission($, at.root, moved.mission, [moved.record])
+    await missionReport($, at.root, moved.mission)
+    return '✦ mission cancelled'
+  }
+  if (m.status !== 'review') return `✦ the mission is ${m.status}, not waiting for approval`
+  if (!m.criteria.length) return '✦ no criteria came back: /mission cancel and draft again, or edit them in the app'
+  const startSha = inRepo ? await pinSnapshot(runner($), `refs/spark/missions/${m.id}/start`, `mission ${m.id} start`).catch(() => undefined) : undefined
+  const moved = move(m, 'running', `you approved ${criteriaCount(m.criteria.length)}`, now)
+  const running: Mission = { ...moved.mission, approvedAt: now, ...(startSha ? { startSha } : {}) }
+  await saveMission($, at.root, running, [moved.record])
+  fillLater($, `\\${runText(running)}`)
+  return '✦ approved: Enter sends the mission to Claude'
+}
+
+// A prompt sent while a mission runs or waits is yours; one that answers a question resumes it.
+async function missionPrompt($: EngineInterface, text: string) {
+  const at = await read($, MISSION)
+  if (!at || !text || (at.status !== 'running' && at.status !== 'waiting')) return
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  const you = youRecord(text, now)
+  if (m.status !== 'waiting') return saveMission($, at.root, m, [you])
+  const moved = move(m, 'running', 'you answered', now)
+  await saveMission($, at.root, moved.mission, [you, moved.record])
+}
+
+async function missionTool(
+  $: EngineInterface,
+  at: { id: string; root: string },
+  e: { tool: string; tool_use_id?: string },
+  result: { isError?: boolean; deny?: string; text?: unknown },
+) {
+  const now = await $.clock.now()
+  const id = e.tool_use_id ?? String(now)
+  await saveMission($, at.root, await loadMission($, at), [
+    ...recordsFor({ kind: 'tool', id, name: e.tool, input: e as unknown as Record<string, unknown> }, now),
+    ...recordsFor({ kind: 'tool-result', id, isError: Boolean(result.isError || result.deny), output: String(result.text ?? result.deny ?? '') }, now),
+  ])
+}
+
+async function missionTurn($: EngineInterface, answer: string) {
+  const at = await read($, MISSION)
+  if (!at || (at.status !== 'draft' && at.status !== 'running')) return
+  const m = await loadMission($, at)
+  const now = await $.clock.now()
+  const log = await $.fs.read(`${at.root}/${GATE_LOG}`).catch(() => '')
+  const done = turnEnded(m, await missionRecords($, at), { ok: true, text: answer }, parseGateLines(log.slice(m.gateOffset)), log.length, now)
+  await saveMission($, at.root, done.mission, [...recordsFor({ kind: 'result', ok: true, text: answer }, now), ...done.records])
+  if (done.mission.status === 'review') {
+    $.ui.toast(`✦ ${criteriaCount(done.mission.criteria.length)} drafted: /mission shows them, /mission approve starts`)
+    await openPane($, MISSION_PANE, 'mission')
+  }
+  if (FINAL.has(done.mission.status)) await missionReport($, at.root, done.mission)
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -742,6 +869,7 @@ export const register: Register = (on, options) => {
     // A continuation (empty text, as after the test gate's block) is the same piece of work:
     // its snapshot stays, so what the turn changed is still measured from the prompt.
     if (inRepo && !(e.text === '' && (await read($, TURN)))) await beginTurn($, e.text)
+    void missionPrompt($, e.text).catch(() => {})
     return next(e)
   })
 
@@ -749,6 +877,8 @@ export const register: Register = (on, options) => {
     const input = e as { file_path?: unknown; notebook_path?: unknown; command?: unknown }
     const file = input.file_path ?? input.notebook_path
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && inSparkDir(file, await repoTop($))) return { deny: SPARK_DIR_REASON }
+    const missionAt = e.agentId ? null : await read($, MISSION)
+    if (missionAt?.status === 'draft' && DRAFT_DENIED.has(e.tool)) return { deny: DRAFT_DENIAL }
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && (await read($, HALT)) && !editAllowedWhileHalted(file, await repoTop($)))
       return { deny: HALT_REASON }
     const unread = e.tool === 'Read' && typeof file === 'string' ? readDenied(file, await repoTop($)) : undefined
@@ -768,6 +898,8 @@ export const register: Register = (on, options) => {
     }
     const plan = e.tool === 'ExitPlanMode' && !e.agentId && !result.deny && !result.isError ? (result.result as { plan?: unknown })?.plan : undefined
     if (typeof plan === 'string' && plan.trim()) await saveDesignDoc($, plan)
+    if (missionAt && (missionAt.status === 'draft' || missionAt.status === 'running'))
+      await missionTool($, missionAt, e, result as { isError?: boolean; deny?: string; text?: unknown }).catch(() => {})
     return out
   })
 
@@ -823,7 +955,32 @@ export const register: Register = (on, options) => {
         .catch(() => {})
         .then(() => reviewGoal($, e, config))
         .catch(() => {})
+        .then(() => missionTurn($, e.answer))
+        .catch(() => {})
     return done
+  })
+
+  on('command.run', { command: 'mission' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    const at = await read($, MISSION)
+    try {
+      if (!args) {
+        if (!at) return { text: '✦ no mission. /mission <what should be true when it is done>' }
+        await openPane($, MISSION_PANE, 'mission')
+        return { text: '✦ mission pane open' }
+      }
+      if (args === 'approve' || args === 'cancel') return { text: at ? await missionAction($, at, args) : '✦ no mission' }
+      if (at && !FINAL.has(at.status)) return { text: `✦ a mission is ${at.status}: /mission cancel ends it first` }
+      const root = await repoTop($)
+      const gateOffset = (await $.fs.read(`${root}/${GATE_LOG}`).catch(() => '')).length
+      const { mission, record } = newMission(args, await $.clock.now(), hex4(), gateOffset)
+      await saveMission($, root, mission, [record])
+      if (inRepo) await ignoreSparkDir($)
+      fillLater($, `\\${draftText(args)}`)
+      return { text: '✦ mission created: Enter sends the draft request (Claude only reads). Then /mission approve.' }
+    } catch (err) {
+      return { text: `✦ ${message(err)}` }
+    }
   })
 
   on('command.run', { command: 'sandbox' }, async ($) => {
@@ -942,6 +1099,48 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: MISSION_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const at = await read($, MISSION)
+    if (!at) return <Text dimColor>no mission</Text>
+    const m = await loadMission($, at).catch(() => undefined)
+    if (!m) return <Text color={ERROR}>the mission file is unreadable</Text>
+    const rows = (await missionRecords($, at)).map(describe).filter((r): r is Row => r !== undefined).slice(-30)
+    const report = await $.fs
+      .read(missionFile(at.root, at.id, 'report.json'))
+      .then((t) => JSON.parse(t) as unknown)
+      .catch(() => undefined)
+    return (
+      <Box flexDirection="column">
+        <Text bold>{m.title}</Text>
+        <Text dimColor>
+          {m.status} · {m.reason}
+        </Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>criteria</Text>
+          {m.criteria.length ? null : <Text dimColor>none yet</Text>}
+          {m.criteria.map((c, i) => (
+            <Text>{`${i + 1}. ${c.text} · ${c.how}`}</Text>
+          ))}
+        </Box>
+        {report
+          ? reportSections(report).map((s) => (
+              <Box marginTop={1} flexDirection="column">
+                <Text bold>{s.heading}</Text>
+                {s.lines.length ? s.lines.map((l) => <Text color={l.tone ? TONE[l.tone] : undefined}>{l.text}</Text>) : <Text dimColor>none</Text>}
+              </Box>
+            ))
+          : null}
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>timeline</Text>
+          {rows.map((r) => (
+            <Text color={TONE[r.tone]}>{`${r.glyph} ${r.text}`}</Text>
+          ))}
+        </Box>
       </Box>
     )
   })
