@@ -527,7 +527,7 @@ spark.on('permission', ({ id, tool, input, note }) => {
   if (note) card.append(el('div', 'gate-note', `✦ spark gate: ${note}`));
   const row = el('div', 'buttons');
   const answer = (allow, always) => {
-    spark.answerPermission({ id, tool, allow, always });
+    spark.answerPermission({ id, allow, always });
     row.replaceWith(el('div', allow ? 'answered allowed' : 'answered denied', allow ? (always ? `Allowed (and ${tool} from now on)` : 'Allowed') : 'Denied'));
   };
   const yes = el('button', 'yes', 'Allow');

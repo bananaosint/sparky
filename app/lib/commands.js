@@ -1,5 +1,5 @@
 // Slash commands typed into the message box. Spark's modes, the model and effort
-// pickers and /marathon are handled in the window; any other /command passes through to Claude Code.
+// pickers, /marathon and /mission are handled in the window; any other /command passes through to Claude Code.
 
 export const MODES = { 'anti-slop': ['antislop', 'anti-slop'], 'thinking-red-team': ['red-team', 'redteam', 'thinking-red-team'], grillme: ['grillme'] };
 export const MODELS = ['default', 'auto', 'ultracode', 'opus', 'sonnet', 'haiku', 'gemini'];
@@ -14,6 +14,7 @@ export function parseCommand(text) {
   if (name === 'model' && MODELS.includes(arg.trim().toLowerCase())) return { kind: 'model', model: arg.trim().toLowerCase() };
   if (name === 'effort' && EFFORTS.includes(arg.trim().toLowerCase())) return { kind: 'effort', effort: arg.trim().toLowerCase() };
   if (name === 'marathon') return { kind: 'marathon', args: arg.trim() };
+  if (name === 'mission') return { kind: 'mission', args: arg.trim() };
   return { kind: 'passthrough' };
 }
 

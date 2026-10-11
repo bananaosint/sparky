@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -14,6 +14,8 @@ import { THEMES, THEME_NAMES } from './staged/src/palettes.js';
 import { parseLine, userMessage } from './lib/stream.js';
 import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
+import { createStore, excludeSpark } from './lib/mission-store.js';
+import { createMissionRunner } from './lib/mission-runner.js';
 import { cookPrompt, quickAnswer } from './lib/cook.js';
 import { DEFAULT_AUTO_MODELS, CLAUDE_AUTO_MODELS, isClaude, autoAnswer, runClaude } from './lib/auto.js';
 import { sessionModelArgs, reviewDue, REVIEW_PASS } from './lib/ultracode.js';
@@ -65,6 +67,8 @@ let fromUser = false;
 let turnEdited = false;
 // Auto's one-shot Claude processes, so ■ can stop them.
 const autoChildren = new Set();
+// Missions for the open folder (lib/mission-runner.js), made again when the folder changes.
+let missions;
 
 const send = (channel, data) => win?.webContents.send(channel, data);
 const rgb = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
@@ -98,6 +102,35 @@ function account() {
   }
 }
 
+// git in `dir`, the way snapshot.ts runs commands. No shell: arguments go as given.
+const gitIn = (dir) => (argv, init = {}) =>
+  new Promise((done) =>
+    execFile(argv[0], argv.slice(1), { cwd: init.cwd ?? dir, env: { ...process.env, ...init.env }, timeout: init.timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) =>
+      done({ exitCode: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr }),
+    ),
+  );
+
+// Missions live at the repo top (the folder itself outside a repo), next to the plugin's gate.jsonl.
+async function openMissions() {
+  const run = gitIn(cwd);
+  const top = await run(['git', 'rev-parse', '--show-toplevel']);
+  const inRepo = top.exitCode === 0;
+  const root = inRepo ? top.stdout.trim() : cwd;
+  if (inRepo) {
+    const exclude = await run(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'info/exclude']);
+    if (exclude.exitCode === 0) excludeSpark(exclude.stdout.trim());
+  }
+  missions = createMissionRunner({
+    store: createStore(root),
+    write: (line) => claude?.stdin.write(`${line}\n`),
+    notify: (message) => send('mission', message),
+    run: inRepo ? gitIn(root) : undefined,
+    now: Date.now,
+    hex4: () => randomBytes(2).toString('hex'),
+  });
+  missions.recover();
+}
+
 // Claude Code asks before a tool runs; the bridge server relays the question here.
 function startBridge() {
   const token = randomBytes(16).toString('hex');
@@ -108,11 +141,16 @@ function startBridge() {
     req.on('end', () => {
       const { tool, input } = JSON.parse(body || '{}');
       const answer = (decision) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(decision));
+      const held = missions?.draftDenial(tool, input);
+      if (held) return answer({ allow: false, message: held });
       // A command Spark's gate holds is asked about every time: "always" can't cover it.
       const note = gateNote(tool, input, { repo: cwd, home: homedir() });
-      if (!note && (alwaysAllow.has(tool) || (EDIT_TOOLS.has(tool) && settings().autoEdits))) return answer({ allow: true });
+      if (!note && (alwaysAllow.has(tool) || (EDIT_TOOLS.has(tool) && settings().autoEdits))) {
+        missions?.permission(tool, input, 'auto-allowed');
+        return answer({ allow: true });
+      }
       const id = randomBytes(6).toString('hex');
-      pending.set(id, answer);
+      pending.set(id, { answer, tool, input, note });
       send('permission', { id, tool, input, note });
     });
   });
@@ -123,8 +161,9 @@ function stopClaude() {
   const child = claude;
   claude = undefined;
   marathon.restarted();
+  missions?.interrupted('Claude Code restarted');
   child?.kill();
-  for (const answer of pending.values()) answer({ allow: false, message: 'Stopped from Spark.' });
+  for (const { answer } of pending.values()) answer({ allow: false, message: 'Stopped from Spark.' });
   pending.clear();
 }
 
@@ -177,6 +216,7 @@ function startClaude({ resume, keepBusy = false } = {}) {
       if (event.kind === 'tool' && EDIT_TOOLS.has(event.name)) turnEdited = true;
       const inMarathon = marathon.running();
       marathon.onEvent(event);
+      missions?.onEvent(event);
       if (event.kind === 'result' && reviewDue({ model: settings().model, fromUser, marathon: inMarathon, edited: turnEdited }, event)) {
         turnEdited = false;
         fromUser = false;
@@ -189,12 +229,14 @@ function startClaude({ resume, keepBusy = false } = {}) {
   child.on('error', (err) => {
     if (claude !== child) return;
     claude = undefined;
+    missions?.exited(undefined, err.message);
     send('exit', { error: `Could not start Claude Code (${err.message}). Install it with: irm https://claude.ai/install.ps1 | iex` });
   });
   child.on('exit', (code) => {
     if (claude !== child) return;
     claude = undefined;
     marathon.end('Claude Code stopped', { restore: false });
+    missions?.exited(code, errors.trim() || undefined);
     send('exit', { code, error: errors.trim() || undefined });
   });
   win.setTitle(`Spark · ${basename(cwd)}`);
@@ -232,6 +274,7 @@ ipcMain.on('ready', async () => {
   cwd = fromArgs ? resolve(fromArgs) : last && isFolder(last) ? last : await chooseFolder();
   folderMode = cwd && (await decideTrust(cwd));
   if (!folderMode) return app.quit();
+  await openMissions();
   startClaude();
 });
 
@@ -239,18 +282,49 @@ ipcMain.on('send-message', (_e, message) => {
   if (!claude) startClaude({ resume: sessionId, keepBusy: true });
   fromUser = !marathon.running();
   turnEdited = false;
+  missions?.you(message.text ?? '');
   claude.stdin.write(`${userMessage(marathon.outgoing(message))}\n`);
 });
 
 ipcMain.on('marathon', (_e, request) => {
   if (request.action === 'stop') return marathon.end('you stopped it', { restore: true });
+  if (missions?.busy()) return send('marathon', { kind: 'end', reason: 'a mission is running', summary: '' });
   // A restart would end the marathon being set up.
   if (!claude) startClaude({ resume: sessionId, keepBusy: true });
   marathon.start({ task: request.task, limits: request.limits, picker: settings().model });
 });
 
+ipcMain.handle('missions', () => missions?.list() ?? []);
+ipcMain.handle('mission-view', (_e, id) => missions?.view(id));
+ipcMain.handle('mission', async (_e, request = {}) => {
+  if (!missions) return { error: 'no folder is open' };
+  if (request.action === 'start') {
+    if (['gemini', 'auto'].includes(settings().model)) return { error: 'a mission needs Claude Code: pick a Claude model or UltraCode first' };
+    if (marathon.running()) return { error: 'a marathon is running: /marathon stop ends it first' };
+    if (!claude) startClaude({ resume: sessionId, keepBusy: true });
+    fromUser = false;
+    turnEdited = false;
+    return missions.start(String(request.objective ?? ''), { sessionId });
+  }
+  if (request.action === 'approve') {
+    fromUser = false;
+    return missions.approve(request.id, request.criteria);
+  }
+  if (request.action === 'cancel') {
+    const out = missions.cancel(request.id);
+    if (out.stop) startClaude({ resume: sessionId });
+    return out;
+  }
+  if (request.action === 'resume') {
+    fromUser = false;
+    return missions.resume(request.id, (resume) => startClaude({ resume, keepBusy: true }));
+  }
+  return { error: 'unknown mission action' };
+});
+
 // Stopping ends the running turn; the conversation carries on in a fresh process.
 ipcMain.on('stop', () => {
+  missions?.stopped();
   marathon.end('you pressed stop', { restore: false });
   startClaude({ resume: sessionId });
 });
@@ -258,6 +332,7 @@ ipcMain.on('stop', () => {
 ipcMain.on('new-chat', () => {
   sessionId = undefined;
   alwaysAllow = new Set();
+  missions?.interrupted('you started a new chat', { detach: true });
   startClaude();
 });
 
@@ -265,17 +340,23 @@ ipcMain.on('open-folder', async () => {
   const folder = await chooseFolder();
   const mode = folder && (await decideTrust(folder));
   if (!mode) return;
+  missions?.interrupted('you opened another folder', { detach: true });
   cwd = folder;
   folderMode = mode;
   sessionId = undefined;
   alwaysAllow = new Set();
+  await openMissions();
   startClaude();
 });
 
-ipcMain.on('permission-answer', (_e, { id, tool, allow, always }) => {
-  if (allow && always) alwaysAllow.add(tool);
-  pending.get(id)?.({ allow });
+// Main uses the tool it asked about, never one the window names.
+ipcMain.on('permission-answer', (_e, { id, allow, always }) => {
+  const ask = pending.get(id);
+  if (!ask) return;
   pending.delete(id);
+  if (allow && always) alwaysAllow.add(ask.tool);
+  missions?.permission(ask.tool, ask.input, allow ? (always ? 'always' : 'allowed') : 'denied', ask.note);
+  ask.answer({ allow });
 });
 
 // `rewrite: false` picks skills only: Tab Tab sends the typed prompt with them.
