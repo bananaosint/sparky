@@ -92,6 +92,8 @@ const PREFIX = new Set(['sudo', '&', 'call', 'command', 'exec', 'time', 'nohup',
 // PowerShell parameters whose next word is a value, not a path.
 const VALUED = new Set(['-filter', '-include', '-exclude', '-erroraction', '-ea', '-name', '-value', '-scope', '-outfile'])
 const SECRETS = [/(%appdata%|\$env:appdata|\$\{?appdata\}?|appdata[\\/]roaming)[\\/]spark\b/i, /\.claude[\\/]+["']?\.cred/i, /\b(cmdkey|vaultcmd)\b/i]
+// Spark's mission records: a forged line there would be reported as a real test result.
+const RECORDS = /\.spark[\\/]+["']?(gate\.jsonl|missions)\b/i
 // Code fetched and run in one go: a shell fed by a command or process substitution that
 // downloads, and Invoke-Expression of a download.
 const DOWNLOAD_RUN = [
@@ -297,6 +299,7 @@ export const previewArgv = (p: Preview) => (p.kind === 'run' ? p.argv : ['node',
 // undefined: the gate has no opinion and Claude Code's own permissions decide.
 export function classify(command: string, shell: Shell, ctx: GateContext): Verdict | undefined {
   if (SECRETS.some((s) => s.test(command))) return { kind: 'deny', reason: `${BLOCKED}it touches Spark's or Claude Code's credentials` }
+  if (RECORDS.test(command)) return { kind: 'deny', reason: `${BLOCKED}it touches Spark's mission records` }
   if (DOWNLOAD_RUN.some((d) => d.test(command))) return { kind: 'deny', reason: `${BLOCKED}downloaded code run without being read first` }
   const segments = splitCommand(command)
   const asks: Verdict[] = []

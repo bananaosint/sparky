@@ -1,12 +1,12 @@
 // F4: when a turn changed files, Spark runs the repo's tests before Claude may finish.
 import { testCommand } from './agents.ts'
 import { trimOutput } from './failure.ts'
-import { changedSince } from './snapshot.ts'
+import { changedSince, treeNow } from './snapshot.ts'
 import type { Run } from './snapshot'
 
 export type GateIo = { run: Run; list: (dir: string) => Promise<string[]>; read: (path: string) => Promise<string | undefined> }
 
-export type GateResult = { ok: true } | { ok: false; block: string }
+export type GateResult = { ok: true; tree: string } | { ok: false; block: string; exit: number; tree: string }
 
 const TIMEOUT_MS = 300_000
 const TAIL_LINES = 60
@@ -57,7 +57,9 @@ export async function testGate(
   const top = (await io.run(['git', 'rev-parse', '--show-toplevel'])).stdout.trim()
   const argv = await repoTestCommand(io, top, turn.base, sparkConfig, untrusted)
   if (!argv) return undefined
+  // The tree the tests run on, so a mission's report can tell whether the final code is what passed.
+  const tree = await treeNow(io.run)
   const r = await io.run(argv, { cwd: top, timeoutMs: TIMEOUT_MS })
-  if (r.exitCode === 0) return { ok: true }
-  return { ok: false, block: `✦ tests failed (exit ${r.exitCode})\n${trimOutput(`${r.stdout}\n${r.stderr}`, TAIL_LINES)}` }
+  if (r.exitCode === 0) return { ok: true, tree }
+  return { ok: false, exit: r.exitCode, tree, block: `✦ tests failed (exit ${r.exitCode})\n${trimOutput(`${r.stdout}\n${r.stderr}`, TAIL_LINES)}` }
 }

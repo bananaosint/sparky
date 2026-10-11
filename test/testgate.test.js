@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { takeSnapshot } from '../plugin/hooks/snapshot.ts';
+import { takeSnapshot, treeNow } from '../plugin/hooks/snapshot.ts';
 import { testGate, endsInQuestion } from '../plugin/hooks/testgate.ts';
 
 function repo() {
@@ -45,9 +45,12 @@ test('a turn that changed files runs the tests; a failure blocks with the tail',
   write('a.txt', 'two\n');
   const failed = await testGate(io, { base: sha, answer: 'Done.' }, config('node fail.js'));
   assert.equal(failed.ok, false);
+  assert.equal(failed.exit, 3);
   assert.match(failed.block, /^✦ tests failed \(exit 3\)\n/);
   assert.match(failed.block, /not ok 2 subtracts/);
-  assert.deepEqual(await testGate(io, { base: sha, answer: 'Done.' }, config('node pass.js')), { ok: true });
+  // Each run carries the tree it ran on, so a mission report can match it to the final code.
+  assert.deepEqual(await testGate(io, { base: sha, answer: 'Done.' }, config('node pass.js')), { ok: true, tree: await treeNow(io.run) });
+  assert.equal(failed.tree, await treeNow(io.run));
 });
 
 test('no change, a closing question, or no test command means the tests are not run', async () => {
@@ -80,7 +83,7 @@ test("test scripts changed during the turn aren't run unasked: Claude could have
   write('package.json', JSON.stringify({ scripts: { test: 'node pass.js', pretest: 'node fail.js' } }));
   await assert.rejects(testGate(io, { base: sha, answer: 'Done.' }, {}), /test scripts changed/);
   write('package.json', JSON.stringify({ name: 'shop', scripts: { test: 'node pass.js' } }));
-  assert.deepEqual(await testGate(io, { base: sha, answer: 'Done.' }, {}), { ok: true });
+  assert.deepEqual(await testGate(io, { base: sha, answer: 'Done.' }, {}), { ok: true, tree: await treeNow(io.run) });
 });
 
 test('a question is the last thing said, whatever closes it', () => {

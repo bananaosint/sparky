@@ -26,14 +26,15 @@ import { MISP } from './misp'
 import { MODE_DESCRIPTIONS, MODE_NAMES, modesContext, toggleMode } from './modes'
 import { failurePrompt, parseFailure, trimOutput } from './failure'
 import { budgetLine, overLimit, parseGoal, turnTokens } from './goal'
-import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, editAllowedWhileHalted, isBuild } from './halt'
+import { HALT_AFTER, HALT_CONTEXT, HALT_REASON, SPARK_DIR_REASON, editAllowedWhileHalted, inSparkDir, isBuild } from './halt'
+import type { GateCheck } from './mission'
 import { pruneOutput, readDenied } from './prune'
 import { classify, mergeTargets, parseVerdict, previewArgv } from './gate'
 import type { Preview } from './gate'
 import { FACES, mood } from './mascot'
 import { SPARKY_RGBA } from './sparky-image'
 import { redact } from './redact'
-import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot } from './snapshot'
+import { fileDiffs, listSnapshots, restoreSnapshot, takeSnapshot, treeNow } from './snapshot'
 import type { FileDiff, Run } from './snapshot'
 import { testGate } from './testgate'
 import type { GateIo } from './testgate'
@@ -381,6 +382,7 @@ async function countOutcome($: EngineInterface, ok: boolean) {
   const streak = await update($, STREAK, (n) => (n ?? 0) + 1)
   if (streak < HALT_AFTER || (await read($, HALT))) return false
   await $.state.set(HALT, { at: await $.clock.now() })
+  await recordGate($, 'halt', false).catch(() => {})
   $.ui.toast(HALT_REASON)
   return true
 }
@@ -450,6 +452,20 @@ async function ignoreSparkDir($: EngineInterface) {
   const now = await $.fs.read(path).catch(() => '')
   if (now.split(/\r?\n/).includes('.spark/')) return
   await $.fs.write(path, `${now}${now && !now.endsWith('\n') ? '\n' : ''}.spark/\n`)
+}
+
+const GATE_LOG = '.spark/gate.jsonl'
+
+// F4 and F10 outcomes, one line each in .spark/gate.jsonl at the repo top, for mission reports.
+// `tree` is what the check ran on, so a report can tell whether the final code is what passed.
+async function recordGate($: EngineInterface, check: GateCheck, ok: boolean, more: { exit?: number; tree?: string } = {}) {
+  if (!inRepo) return
+  const path = `${await repoTop($)}/${GATE_LOG}`
+  const tree = more.tree ?? (await treeNow(runner($)).catch(() => undefined))
+  const line = JSON.stringify({ at: await $.clock.now(), check, ok, ...(more.exit === undefined ? {} : { exit: more.exit }), ...(tree ? { tree } : {}) })
+  const before = await $.fs.read(path).catch(() => '')
+  await $.fs.write(path, `${before}${line}\n`)
+  await ignoreSparkDir($)
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -732,6 +748,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const input = e as { file_path?: unknown; notebook_path?: unknown; command?: unknown }
     const file = input.file_path ?? input.notebook_path
+    if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && inSparkDir(file, await repoTop($))) return { deny: SPARK_DIR_REASON }
     if (EDIT_TOOLS.has(e.tool) && typeof file === 'string' && (await read($, HALT)) && !editAllowedWhileHalted(file, await repoTop($)))
       return { deny: HALT_REASON }
     const unread = e.tool === 'Read' && typeof file === 'string' ? readDenied(file, await repoTop($)) : undefined
@@ -739,8 +756,10 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     const shell = e.tool === 'Bash' || e.tool === 'PowerShell'
     let out = result
-    if (shell && !e.agentId && typeof input.command === 'string' && isBuild(input.command) && !result.deny)
+    if (shell && !e.agentId && typeof input.command === 'string' && isBuild(input.command) && !result.deny) {
+      await recordGate($, 'build', !result.isError).catch(() => {})
       if (await countOutcome($, !result.isError)) out = { ...result, context: [...(result.context ?? []), HALT_REASON] } as typeof result
+    }
     // The tool has run: a failure from here on must not lose its result.
     if (shell && result.deny === undefined && !result.isError) out = (await pruneShell($, e.tool_use_id, out).catch(() => undefined)) ?? out
     if (!e.agentId && EDIT_TOOLS.has(e.tool) && typeof file === 'string' && !result.deny && !result.isError) {
@@ -782,6 +801,7 @@ export const register: Register = (on, options) => {
     try {
       const untrusted = Boolean(await $.env.get('SPARK_UNTRUSTED'))
       const gate = await testGate(gateIo($), { base: turn.base, answer: e.last_assistant_message ?? '' }, await sparkConfig($), { untrusted })
+      if (gate) await recordGate($, 'tests', gate.ok, gate.ok ? { tree: gate.tree } : { exit: gate.exit, tree: gate.tree }).catch(() => {})
       if (gate && !(await countOutcome($, gate.ok)) && !gate.ok) return { ...done, block: gate.block }
     } catch (err) {
       $.ui.toast(`✦ tests not run: ${message(err)}`)

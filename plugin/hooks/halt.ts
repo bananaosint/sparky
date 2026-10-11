@@ -31,7 +31,12 @@ function resolved(path: string) {
   return parts.join('/').toLowerCase()
 }
 
-export function editAllowedWhileHalted(file: string, top: string) {
-  const absolute = /^([a-z]:)?[\\/]/i.test(file) ? file : `${top}/${file}`
-  return resolved(absolute).startsWith(`${resolved(top)}/docs/postmortems/`)
-}
+// Whether `file` is under `dir` at the repo top, with `..` and `.` folded away so a path can't climb out.
+const under = (file: string, top: string, dir: string) =>
+  resolved(/^([a-z]:)?[\\/]/i.test(file) ? file : `${top}/${file}`).startsWith(`${resolved(top)}/${dir}/`)
+
+export const editAllowedWhileHalted = (file: string, top: string) => under(file, top, 'docs/postmortems')
+
+export const SPARK_DIR_REASON = "✦ .spark/ holds Spark's own records; it isn't edited"
+// Spark's saved outputs and mission records: a forged test result there would be reported as real.
+export const inSparkDir = (file: string, top: string) => under(file, top, '.spark')
