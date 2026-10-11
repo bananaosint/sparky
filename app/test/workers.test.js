@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { bringBack, prepareWorktree, removeWorktree, startWorker } from '../lib/workers.js';
+import { bringBack, prepareWorktree, removeWorktree, startWorker, taskOfRequest } from '../lib/workers.js';
 import { gitIn } from '../lib/mission-open.js';
 import { pinSnapshot } from '../staged/plugin/hooks/snapshot.ts';
 
@@ -101,4 +101,11 @@ test("a worker whose process dies mid-turn fails that turn with the reason, and 
   const w = startWorker({ child: fakeClaude(['exit']), onEvent: () => {} });
   await assert.rejects(w.turn('Do only task t2 now'), /the worker's Claude Code stopped \(code 1\)/);
   await assert.rejects(w.turn('again'), /the worker's Claude Code stopped/);
+});
+
+test("a permission request names the worker's task only when the bridge URL carries a well-formed one", () => {
+  assert.equal(taskOfRequest('/approve?task=t2'), 't2');
+  assert.equal(taskOfRequest('/approve'), undefined);
+  assert.equal(taskOfRequest('/approve?task=../x'), undefined);
+  assert.equal(taskOfRequest('/approve?task=<b>'), undefined);
 });

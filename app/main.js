@@ -16,6 +16,7 @@ import { EDIT_TOOLS } from './lib/marathon.js';
 import { createMarathon } from './lib/marathon-runner.js';
 import { gitIn, openMissions } from './lib/mission-open.js';
 import { createCheckpoints, restoreRefusal } from './lib/checkpoints.js';
+import { taskOfRequest } from './lib/workers.js';
 import { missionRequest } from './lib/mission-ipc.js';
 import { stopChecks } from './lib/verify-run.js';
 import { createCouncilIo } from './lib/council-io.js';
@@ -181,6 +182,7 @@ function startBridge() {
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
       const { tool, input } = JSON.parse(body || '{}');
+      const task = taskOfRequest(req.url);
       const answer = (decision) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(decision));
       const held = missions?.draftDenial(tool, input);
       if (held) return answer({ allow: false, message: held });
@@ -192,7 +194,7 @@ function startBridge() {
       }
       const id = randomBytes(6).toString('hex');
       pending.set(id, { answer, tool, input, note });
-      send('permission', { id, tool, input, note });
+      send('permission', { id, tool, input, note, ...(task ? { task } : {}) });
     });
   });
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ url: `http://127.0.0.1:${server.address().port}/approve`, token })));
@@ -211,18 +213,17 @@ function stopClaude() {
 
 // Claude Code runs headless: messages go in and events come out as JSON lines.
 // `keepBusy`: a message is on its way, so the window must not drop its working state.
-function startClaude({ resume, keepBusy = false } = {}) {
-  stopClaude();
-  saveConfig({ ...loadConfig(), lastFolder: cwd });
-  // Claude Code names its skills only once the first message is in; until then, read them from disk.
-  if (!resume) skillInfo = describeSkills(listSkills(homedir()), homedir());
+// How Claude Code is started: the window's session, or a parallel task's worker (`task`), whose
+// permission questions reach the bridge labelled with it.
+function claudeLaunch({ resume, task } = {}) {
   const base = prepareSession({ pluginDir, key: geminiKey ?? null });
+  const url = task ? `${bridge.url}?task=${encodeURIComponent(task)}` : bridge.url;
   const mcp = {
     mcpServers: {
       spark: {
         command: process.execPath,
         args: [join(bridgeDir, 'permission-server.mjs')],
-        env: { ELECTRON_RUN_AS_NODE: '1', SPARK_BRIDGE_URL: bridge.url, SPARK_BRIDGE_TOKEN: bridge.token },
+        env: { ELECTRON_RUN_AS_NODE: '1', SPARK_BRIDGE_URL: url, SPARK_BRIDGE_TOKEN: bridge.token },
       },
     },
   };
@@ -240,10 +241,30 @@ function startClaude({ resume, keepBusy = false } = {}) {
     '--mcp-config',
     JSON.stringify(mcp),
     ...sessionGuard(folderMode),
-    ...(runningArgs = sessionModelArgs(settings()) ?? runningArgs),
+    ...runningArgs,
     ...(resume ? ['--resume', resume] : []),
   ];
-  const child = spawn('claude', args, { cwd, env: sessionEnv(folderMode, base.env), windowsHide: true });
+  return { base, args, env: sessionEnv(folderMode, base.env) };
+}
+
+// Parallel tasks' Claude Code processes, so quitting ends them.
+const workerChildren = new Set();
+function spawnWorker(task, worktree) {
+  const { args, env } = claudeLaunch({ task });
+  const child = spawn('claude', args, { cwd: worktree, env, windowsHide: true });
+  workerChildren.add(child);
+  child.on('exit', () => workerChildren.delete(child));
+  return child;
+}
+
+function startClaude({ resume, keepBusy = false } = {}) {
+  stopClaude();
+  saveConfig({ ...loadConfig(), lastFolder: cwd });
+  // Claude Code names its skills only once the first message is in; until then, read them from disk.
+  if (!resume) skillInfo = describeSkills(listSkills(homedir()), homedir());
+  runningArgs = sessionModelArgs(settings()) ?? runningArgs;
+  const { base, args, env } = claudeLaunch({ resume });
+  const child = spawn('claude', args, { cwd, env, windowsHide: true });
   claude = child;
   let errors = '';
   createInterface({ input: child.stdout }).on('line', (line) => {
@@ -547,4 +568,7 @@ app.whenReady().then(() => {
   win.on('closed', stopClaude);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', stopChecks);
+app.on('will-quit', () => {
+  stopChecks();
+  for (const child of workerChildren) child.kill();
+});

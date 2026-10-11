@@ -54,6 +54,13 @@ export async function bringBack(run, root, wt, base) {
   }
 }
 
+// A worker's permission bridge posts to the bridge URL with `?task=<id>`, so its cards can say
+// whose they are. Only a well-formed task id counts: it reaches the window.
+export function taskOfRequest(url) {
+  const task = new URL(url, 'http://localhost').searchParams.get('task');
+  return task && /^[A-Za-z][\w-]{0,19}$/.test(task) ? task : undefined;
+}
+
 // A worker's Claude Code process (`child`, started in its worktree by main.js): each turn() sends
 // one message and resolves with that turn's result event. Every event goes to onEvent first.
 export function startWorker({ child, onEvent }) {
